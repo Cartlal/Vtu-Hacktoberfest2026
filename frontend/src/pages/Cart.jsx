@@ -68,7 +68,7 @@ export default function Cart() {
       <div className="container page empty">
         <Ghost size={56} aria-hidden="true" />
         <h1>Your cart is empty</h1>
-        <p>Looks like you haven't added anything yet.</p>
+        <p>Looks like you haven't added anything yet. Even the ghosts are judging your empty cart. Go on, give them something to haunt!</p>
         <Link to="/shop" className="btn">Start shopping</Link>
       </div>
     );
