@@ -67,8 +67,8 @@ export default function Cart() {
     return (
       <div className="container page empty">
         <Ghost size={56} aria-hidden="true" />
-        <h1>NULL</h1>
-        <p>vtu cart down</p>
+        <h1>Your cart is empty</h1>
+        <p>Looks like you haven't added anything yet. Time to shop!</p>
         <Link to="/shop" className="btn">Start shopping</Link>
       </div>
     );
