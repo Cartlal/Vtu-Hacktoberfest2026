@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoFix Haunted Pipeline</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎃</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Creepster&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0d0a14;
+    --bg-2: #15101f;
+    --panel: #1b1428;
+    --panel-2: #231a33;
+    --line: #34284a;
+    --text: #efe7f7;
+    --muted: #a597b8;
+    --faint: #6f6385;
+    --pumpkin: #ff7a1a;
+    --pumpkin-soft: rgba(255, 122, 26, .14);
+    --ghost: #7dffb0;
+    --ghost-soft: rgba(125, 255, 176, .13);
+    --witch: #b78cff;
+    --witch-soft: rgba(183, 140, 255, .15);
+    --blood: #ff4d6a;
+    --blood-soft: rgba(255, 77, 106, .14);
+    --candle: #ffd36b;
+    --candle-soft: rgba(255, 211, 107, .14);
+    --radius: 14px;
+    --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+    --sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --spooky: "Creepster", "Inter", cursive;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background:
+      radial-gradient(1200px 500px at 85% -10%, rgba(255, 122, 26, .16), transparent 60%),
+      radial-gradient(900px 500px at -10% 10%, rgba(183, 140, 255, .14), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font: 14px/1.5 var(--sans);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+  button, input { font: inherit; color: inherit; }
+  a { color: var(--pumpkin); }
+
+  /* ---------- ambient ---------- */
+  .moon {
+    position: fixed; top: 28px; right: 6vw; width: 90px; height: 90px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #fff8e0, #ffe39a 55%, #e0a84a);
+    box-shadow: 0 0 60px 20px rgba(255, 220, 140, .18);
+    opacity: .5; pointer-events: none; z-index: 0;
+  }
+  .bat { position: fixed; font-size: 20px; pointer-events: none; z-index: 0; opacity: .55;
+         animation: fly linear infinite; }
+  @keyframes fly {
+    0%   { transform: translate(-10vw, 0) rotate(-6deg); }
+    25%  { transform: translate(25vw, -30px) rotate(6deg); }
+    50%  { transform: translate(55vw, 20px) rotate(-6deg); }
+    75%  { transform: translate(85vw, -20px) rotate(6deg); }
+    100% { transform: translate(115vw, 0) rotate(-6deg); }
+  }
+  .fog {
+    position: fixed; left: 0; right: 0; bottom: 0; height: 220px; pointer-events: none; z-index: 0;
+    background: linear-gradient(to top, rgba(183, 140, 255, .10), transparent);
+  }
+
+  .wrap { position: relative; z-index: 1; max-width: 1280px; margin: 0 auto; padding: 24px 20px 80px; }
+
+  /* ---------- header ---------- */
+  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 22px; }
+  .brand { display: flex; align-items: center; gap: 14px; }
+  .brand .pumpkin { font-size: 42px; filter: drop-shadow(0 0 14px rgba(255, 122, 26, .6)); animation: flicker 3.2s infinite; }
+  @keyframes flicker { 0%, 100% { filter: drop-shadow(0 0 14px rgba(255,122,26,.6)); } 45% { filter: drop-shadow(0 0 6px rgba(255,122,26,.3)); } 50% { filter: drop-shadow(0 0 20px rgba(255,122,26,.8)); } }
+  h1 { font-family: var(--spooky); font-weight: 400; font-size: 40px; letter-spacing: 1.5px; margin: 0; line-height: 1;
+       color: var(--pumpkin); text-shadow: 0 0 18px rgba(255, 122, 26, .45); }
+  .subtitle { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .pulse { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-radius: 999px;
+           background: var(--panel); border: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+  .pulse .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ghost); box-shadow: 0 0 10px var(--ghost); animation: beat 1.6s infinite; }
+  .pulse.down .dot { background: var(--blood); box-shadow: 0 0 10px var(--blood); }
+  @keyframes beat { 50% { opacity: .35; } }
+
+  /* ---------- stats ---------- */
+  .stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 22px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
+  .stat .label { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  .stat .value { font-size: 30px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .stat.orange .value { color: var(--pumpkin); }
+  .stat.green .value { color: var(--ghost); }
+  .stat.purple .value { color: var(--witch); }
+  .stat.red .value { color: var(--blood); }
+  .stat.yellow .value { color: var(--candle); }
+
+  /* ---------- section ---------- */
+  .section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; margin-bottom: 22px; }
+  .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  h2 { font-size: 15px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px; }
+  .hint { color: var(--faint); font-size: 12px; }
+
+  /* ---------- pipeline (stage map) ---------- */
+  .flow { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 0; position: relative; }
+  .stage { position: relative; text-align: center; padding: 6px 4px 0; }
+  .stage::before { content: ""; position: absolute; top: 34px; left: -50%; right: 50%; height: 3px;
+                   background: var(--line); z-index: 0; }
+  .stage:first-child::before { display: none; }
+  .stage.hot::before { background: linear-gradient(90deg, var(--line), var(--pumpkin)); }
+  .stage .orb { position: relative; z-index: 1; width: 58px; height: 58px; margin: 0 auto; border-radius: 50%;
+                display: grid; place-items: center; font-size: 26px;
+                background: var(--panel-2); border: 2px solid var(--line); transition: .3s; }
+  .stage.hot .orb { border-color: var(--pumpkin); box-shadow: 0 0 22px rgba(255, 122, 26, .45); animation: glow 2s infinite; }
+  .stage.done-stage .orb { border-color: var(--ghost); box-shadow: 0 0 18px rgba(125, 255, 176, .3); }
+  @keyframes glow { 50% { box-shadow: 0 0 34px rgba(255, 122, 26, .75); } }
+  .stage .count { position: absolute; z-index: 2; top: 0; left: calc(50% + 16px); min-width: 24px; height: 24px; padding: 0 7px;
+                  border-radius: 12px; background: var(--pumpkin); color: #1a0d00; font-weight: 700; font-size: 12px;
+                  display: grid; place-items: center; }
+  .stage .count.zero { background: var(--panel-2); color: var(--faint); border: 1px solid var(--line); }
+  .stage.done-stage .count { background: var(--ghost); color: #002611; }
+  .stage .name { font-weight: 600; margin-top: 8px; font-size: 13px; }
+  .stage .desc { color: var(--faint); font-size: 11.5px; line-height: 1.35; padding: 0 4px; }
+  .exits { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--line); }
+  .exit { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 10px; font-size: 13px;
+          background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); }
+  .exit b { font-variant-numeric: tabular-nums; color: var(--text); }
+  .exit.warn { border-color: rgba(255, 211, 107, .4); }
+  .exit.bad { border-color: rgba(255, 77, 106, .45); }
+
+  /* ---------- toolbar ---------- */
+  .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { border: 1px solid var(--line); background: var(--panel-2); color: var(--muted); padding: 5px 12px;
+          border-radius: 999px; cursor: pointer; font-size: 12.5px; }
+  .chip:hover { color: var(--text); }
+  .chip.on { background: var(--pumpkin-soft); border-color: var(--pumpkin); color: var(--pumpkin); }
+  .search { flex: 1; min-width: 180px; max-width: 280px; background: var(--bg-2); border: 1px solid var(--line);
+            border-radius: 10px; padding: 7px 12px; outline: none; }
+  .search:focus { border-color: var(--witch); }
+
+  /* ---------- ticket rows ---------- */
+  .tickets { display: flex; flex-direction: column; gap: 10px; }
+  .ticket { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.6fr) auto; gap: 18px; align-items: center;
+            padding: 14px 16px; border-radius: 12px; background: var(--bg-2); border: 1px solid var(--line);
+            cursor: pointer; transition: border-color .15s, transform .15s; }
+  .ticket:hover { border-color: var(--witch); transform: translateY(-1px); }
+  .ticket.selected { border-color: var(--pumpkin); box-shadow: 0 0 0 1px var(--pumpkin) inset; }
+  .tid { font-family: var(--mono); font-size: 12px; color: var(--witch); }
+  .ext { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-left: 6px; }
+  .ttitle { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tmeta { color: var(--faint); font-size: 12px; margin-top: 2px; }
+  .risk { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: .5px; padding: 1px 7px; border-radius: 6px; margin-left: 6px; vertical-align: 1px; }
+  .risk.LOW { color: var(--ghost); background: var(--ghost-soft); }
+  .risk.MODERATE { color: var(--candle); background: var(--candle-soft); }
+  .risk.HIGH { color: var(--blood); background: var(--blood-soft); }
+
+  /* stepper */
+  .steps { display: flex; align-items: center; }
+  .step { flex: 1; display: flex; align-items: center; min-width: 0; }
+  .step:last-child { flex: 0; }
+  .node { width: 22px; height: 22px; border-radius: 50%; flex: none; display: grid; place-items: center; font-size: 11px;
+          background: var(--panel-2); border: 2px solid var(--line); color: var(--faint); position: relative; }
+  .bar { flex: 1; height: 3px; background: var(--line); margin: 0 3px; border-radius: 2px; }
+  .step.done .node { background: var(--ghost); border-color: var(--ghost); color: #002611; }
+  .step.done .bar { background: var(--ghost); }
+  .step.active .node { border-color: var(--pumpkin); background: var(--pumpkin); color: #1a0d00; box-shadow: 0 0 12px var(--pumpkin); animation: glow 1.6s infinite; }
+  .step.warn .node { border-color: var(--candle); background: var(--candle); color: #2a1d00; }
+  .step.fail .node { border-color: var(--blood); background: var(--blood); color: #2a0008; }
+  .step-label { font-size: 11.5px; color: var(--muted); margin-top: 6px; }
+
+  .state { text-align: right; min-width: 150px; }
+  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .badge.active { color: var(--pumpkin); background: var(--pumpkin-soft); }
+  .badge.live { color: var(--ghost); background: var(--ghost-soft); }
+  .badge.warn { color: var(--candle); background: var(--candle-soft); }
+  .badge.fail { color: var(--blood); background: var(--blood-soft); }
+  .badge.wait { color: var(--witch); background: var(--witch-soft); }
+  .since { font-size: 11.5px; color: var(--faint); margin-top: 4px; }
+
+  .empty { text-align: center; padding: 50px 20px; color: var(--muted); }
+  .empty .big { font-size: 48px; margin-bottom: 8px; }
+
+  /* ---------- drawer ---------- */
+  .scrim { position: fixed; inset: 0; background: rgba(5, 3, 10, .55); opacity: 0; pointer-events: none; transition: .2s; z-index: 10; }
+  .scrim.open { opacity: 1; pointer-events: auto; }
+  .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(620px, 100vw); background: var(--bg-2);
+            border-left: 1px solid var(--line); z-index: 11; transform: translateX(100%); transition: transform .25s ease;
+            display: flex; flex-direction: column; }
+  .drawer.open { transform: none; box-shadow: -20px 0 60px rgba(0, 0, 0, .5); }
+  .drawer-head { padding: 18px 20px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: flex-start; }
+  .drawer-head .grow { flex: 1; min-width: 0; }
+  .drawer-head h3 { margin: 4px 0 0; font-size: 18px; }
+  .x { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; width: 34px; height: 34px; cursor: pointer; flex: none; }
+  .x:hover { border-color: var(--pumpkin); }
+  .drawer-body { padding: 18px 20px 30px; overflow-y: auto; overflow-x: hidden; flex: 1; }
+  .block { margin-bottom: 20px; }
+  .block h4 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); font-weight: 600; }
+  .kv { display: grid; grid-template-columns: 120px 1fr; gap: 6px 12px; font-size: 13px; }
+  .kv dt { color: var(--faint); }
+  .kv dd { margin: 0; word-break: break-word; }
+  .prose { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; white-space: pre-wrap; font-size: 13px; word-break: break-word; }
+  .errbox { background: var(--blood-soft); border: 1px solid rgba(255, 77, 106, .45); color: #ffc2cd; border-radius: 10px; padding: 12px 14px; white-space: pre-wrap; font-family: var(--mono); font-size: 12px; word-break: break-word; }
+  .questions { margin: 0; padding-left: 18px; }
+  .log { background: #07050c; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; font-family: var(--mono);
+         font-size: 12px; line-height: 1.55; max-height: 420px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+  .log .l-claude { color: var(--text); }
+  .log .l-tool { color: var(--witch); }
+  .log .l-fail { color: var(--blood); }
+  .log .l-ok { color: var(--ghost); }
+  .log .l-sep { color: var(--pumpkin); }
+  .log .l-dim { color: var(--faint); }
+  .conf { height: 6px; background: var(--panel-2); border-radius: 3px; overflow: hidden; margin-top: 4px; max-width: 200px; }
+  .conf span { display: block; height: 100%; background: linear-gradient(90deg, var(--witch), var(--pumpkin)); }
+  .approve { display: flex; gap: 8px; flex-wrap: wrap; }
+  .approve input { flex: 1; min-width: 160px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; outline: none; }
+  .btn { background: var(--pumpkin); color: #1a0d00; border: none; border-radius: 10px; padding: 8px 16px; font-weight: 700; cursor: pointer; }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .note { font-size: 12px; margin-top: 6px; color: var(--muted); }
+  .note.bad { color: var(--blood); }
+  .note.good { color: var(--ghost); }
+
+  @media (max-width: 960px) {
+    .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .ticket { grid-template-columns: 1fr; gap: 12px; }
+    .state { text-align: left; }
+    .flow { grid-template-columns: repeat(4, minmax(0, 1fr)); row-gap: 18px; }
+    .stage:nth-child(5)::before { display: none; }
+  }
+  @media (max-width: 560px) {
+    .wrap { padding: 16px 16px 60px; }
+    h1 { font-size: 30px; }
+    .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .flow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .stage::before { display: none; }
+    .step-label { display: none; }
+    .moon { width: 56px; height: 56px; }
+    .kv { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+    .bat { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="moon" aria-hidden="true"></div>
+<div class="fog" aria-hidden="true"></div>
+<div id="bats" aria-hidden="true"></div>
+
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <div class="pumpkin" aria-hidden="true">🎃</div>
+      <div>
+        <h1>AutoFix Haunted Pipeline</h1>
+        <div class="subtitle">VictoryPath bug reports · Gemma triage → Claude fix → GitHub Actions deploy</div>
+      </div>
+    </div>
+    <div class="pulse" id="pulse"><span class="dot"></span><span id="pulse-text">Summoning…</span></div>
+  </header>
+
+  <div class="stats" id="stats"></div>
+
+  <section class="section">
+    <div class="section-head">
+      <h2>🕸️ Where every fix is right now</h2>
+      <span class="hint">Glowing stages have tickets in them</span>
+    </div>
+    <div class="flow" id="flow"></div>
+    <div class="exits" id="exits"></div>
+  </section>
+
+  <section class="section">
+    <div class="section-head">
+      <h2>🦇 Tickets</h2>
+      <div class="toolbar">
+        <div class="chips" id="chips"></div>
+        <input class="search" id="search" type="search" placeholder="Search ID or title…" aria-label="Search tickets">
+      </div>
+    </div>
+    <div class="tickets" id="tickets"></div>
+  </section>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-label="Ticket details">
+  <div class="drawer-head">
+    <div class="grow" id="drawer-title"></div>
+    <button class="x" id="close" aria-label="Close">✕</button>
+  </div>
+  <div class="drawer-body" id="drawer-body"></div>
+</aside>
+
+<script>
+const POLL_MS = 3000;
+
+// Main path a LOW-risk ticket travels. `statuses` = tickets sitting in that stage.
+const STAGES = [
+  { key: "reported", icon: "🕯️", name: "Reported",  desc: "Bug lands from VictoryPath", statuses: [] },
+  { key: "triage",   icon: "🔮", name: "Gemma triage", desc: "Rating LOW / MODERATE / HIGH", statuses: ["NEW"] },
+  { key: "queued",   icon: "⚰️", name: "Queued",    desc: "Waiting for the Claude worker", statuses: ["QUEUED"] },
+  { key: "fixing",   icon: "🧪", name: "Claude brewing", desc: "Editing, linting, building", statuses: ["IN_PROGRESS"] },
+  { key: "pushed",   icon: "🦇", name: "Pushed",    desc: "Commit on Production, CI running", statuses: ["PUSHED"] },
+  { key: "deploying",icon: "🧹", name: "Deploying", desc: "GitHub Actions deploy + health check", statuses: ["DEPLOYING"] },
+  { key: "live",     icon: "🎃", name: "Live",      desc: "Fix is on the site", statuses: ["LIVE"] },
+];
+
+// status -> where it sits on the stepper and how to describe it
+const STATUS = {
+  NEW:           { at: 1, kind: "active", label: "Gemma is triaging", icon: "🔮" },
+  QUEUED:        { at: 2, kind: "active", label: "Queued for Claude", icon: "⚰️" },
+  IN_PROGRESS:   { at: 3, kind: "active", label: "Claude is fixing", icon: "🧪" },
+  PUSHED:        { at: 4, kind: "active", label: "Pushed · CI running", icon: "🦇" },
+  DEPLOYING:     { at: 5, kind: "active", label: "Deploying", icon: "🧹" },
+  LIVE:          { at: 6, kind: "live",   label: "Live on the site", icon: "🎃" },
+  NEEDS_INFO:    { at: 1, kind: "warn",   label: "Needs info from reporter", icon: "❓" },
+  HUMAN:         { at: 1, kind: "wait",   label: "Handed to a developer", icon: "🧛" },
+  AGENT_FAILED:  { at: 3, kind: "fail",   label: "Claude gave up", icon: "💀" },
+  DEPLOY_FAILED: { at: 5, kind: "fail",   label: "Deploy failed", icon: "🪦" },
+};
+const APPROVABLE = new Set(["NEEDS_INFO", "HUMAN", "AGENT_FAILED", "DEPLOY_FAILED"]);
+const ACTIVE = new Set(["NEW", "QUEUED", "IN_PROGRESS", "PUSHED", "DEPLOYING"]);
+
+const FILTERS = [
+  { key: "all",    label: "All",           test: () => true },
+  { key: "active", label: "In flight",     test: t => ACTIVE.has(t.status) },
+  { key: "human",  label: "Needs a human", test: t => t.status === "NEEDS_INFO" || t.status === "HUMAN" },
+  { key: "failed", label: "Failed",        test: t => t.status === "AGENT_FAILED" || t.status === "DEPLOY_FAILED" },
+  { key: "live",   label: "Live",          test: t => t.status === "LIVE" },
+];
+
+let tickets = [];
+let filter = "all";
+let query = "";
+let selected = null;
+let lastOk = null;
+let failures = 0;
+let lastText = "";
+let lastRender = 0;
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function recall(key) {
+  try { return sessionStorage.getItem(key) || ""; } catch { return ""; }
+}
+
+function ago(iso) {
+  if (!iso) return "";
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return `${Math.floor(s)}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+function when(iso) {
+  return iso ? new Date(iso).toLocaleString() : "—";
+}
+
+// ---------- ambient bats ----------
+(function bats() {
+  const host = $("bats");
+  for (let i = 0; i < 5; i++) {
+    const b = document.createElement("div");
+    b.className = "bat";
+    b.textContent = "🦇";
+    b.style.top = `${8 + Math.random() * 55}vh`;
+    b.style.fontSize = `${14 + Math.random() * 14}px`;
+    b.style.animationDuration = `${22 + Math.random() * 26}s`;
+    b.style.animationDelay = `${-Math.random() * 40}s`;
+    host.appendChild(b);
+  }
+})();
+
+// ---------- rendering ----------
+function renderStats() {
+  const n = s => tickets.filter(t => s.includes(t.status)).length;
+  const cards = [
+    { cls: "purple", icon: "📜", label: "Total tickets", value: tickets.length },
+    { cls: "orange", icon: "🔥", label: "In flight",     value: n([...ACTIVE]) },
+    { cls: "green",  icon: "🎃", label: "Live fixes",    value: n(["LIVE"]) },
+    { cls: "yellow", icon: "🧛", label: "Needs a human", value: n(["NEEDS_INFO", "HUMAN"]) },
+    { cls: "red",    icon: "💀", label: "Failed",        value: n(["AGENT_FAILED", "DEPLOY_FAILED"]) },
+  ];
+  $("stats").innerHTML = cards.map(c =>
+    `<div class="stat ${c.cls}"><div class="label">${c.icon} ${c.label}</div><div class="value">${c.value}</div></div>`
+  ).join("");
+}
+
+function renderFlow() {
+  $("flow").innerHTML = STAGES.map((s, i) => {
+    const count = tickets.filter(t => s.statuses.includes(t.status)).length;
+    const isLive = s.key === "live";
+    const cls = count && !isLive ? "hot" : isLive && count ? "done-stage" : "";
+    const badge = s.key === "reported" ? "" : `<span class="count ${count ? "" : "zero"}">${count}</span>`;
+    return `<div class="stage ${cls}">
+      <div class="orb">${s.icon}</div>${badge}
+      <div class="name">${s.name}</div>
+      <div class="desc">${s.desc}</div>
+    </div>`;
+  }).join("");
+
+  const exits = [
+    { cls: "warn", icon: "❓", label: "Needs info (MODERATE)", status: "NEEDS_INFO" },
+    { cls: "",     icon: "🧛", label: "Developer (HIGH)",      status: "HUMAN" },
+    { cls: "bad",  icon: "💀", label: "Claude gave up",        status: "AGENT_FAILED" },
+    { cls: "bad",  icon: "🪦", label: "Deploy failed",         status: "DEPLOY_FAILED" },
+  ];
+  $("exits").innerHTML = `<span class="hint" style="align-self:center">Off the path:</span>` + exits.map(e =>
+    `<div class="exit ${e.cls}">${e.icon} ${e.label} <b>${tickets.filter(t => t.status === e.status).length}</b></div>`
+  ).join("");
+}
+
+function renderChips() {
+  $("chips").innerHTML = FILTERS.map(f => {
+    const count = tickets.filter(f.test).length;
+    return `<button class="chip ${filter === f.key ? "on" : ""}" data-filter="${f.key}">${f.label} · ${count}</button>`;
+  }).join("");
+}
+
+function stepper(t) {
+  const st = STATUS[t.status] || { at: 0, kind: "active" };
+  return `<div class="steps">${STAGES.map((s, i) => {
+    let cls = "", mark = "";
+    if (t.status === "LIVE" || i < st.at) { cls = "done"; mark = "✓"; }
+    else if (i === st.at) { cls = st.kind === "live" ? "done" : st.kind === "wait" ? "warn" : st.kind; mark = st.kind === "fail" ? "✕" : st.kind === "warn" || st.kind === "wait" ? "!" : "•"; }
+    return `<div class="step ${cls}" title="${esc(s.name)}"><div class="node">${mark}</div>${i < STAGES.length - 1 ? '<div class="bar"></div>' : ""}</div>`;
+  }).join("")}</div>
+  <div class="step-label">${esc((STAGES[st.at] || STAGES[0]).name)} · step ${Math.min(st.at + 1, STAGES.length)} of ${STAGES.length}</div>`;
+}
+
+function badge(t) {
+  const st = STATUS[t.status] || { kind: "wait", label: t.status, icon: "•" };
+  return `<span class="badge ${st.kind}">${st.icon} ${esc(st.label)}</span>`;
+}
+
+function renderTickets() {
+  const f = FILTERS.find(x => x.key === filter);
+  const q = query.trim().toLowerCase();
+  const rows = tickets.filter(f.test).filter(t =>
+    !q || [t.id, t.title, t.external_id].some(v => String(v || "").toLowerCase().includes(q)));
+
+  if (!rows.length) {
+    $("tickets").innerHTML = tickets.length
+      ? `<div class="empty"><div class="big">👻</div>Nothing matches this filter.</div>`
+      : `<div class="empty"><div class="big">🪦</div>The graveyard is quiet. No tickets yet.<br><span class="hint">Report a bug in VictoryPath, or POST to /api/tickets.</span></div>`;
+    return;
+  }
+  $("tickets").innerHTML = rows.map(t => `
+    <div class="ticket ${selected === t.id ? "selected" : ""}" data-id="${esc(t.id)}" tabindex="0" role="button">
+      <div style="min-width:0">
+        <div><span class="tid">${esc(t.id)}</span>${t.external_id ? `<span class="ext">${esc(t.external_id)}</span>` : ""}${t.risk ? `<span class="risk ${esc(t.risk)}">${esc(t.risk)}</span>` : ""}</div>
+        <div class="ttitle" title="${esc(t.title)}">${esc(t.title)}</div>
+        <div class="tmeta">${esc(t.reporter_name || "anonymous")} · reported ${ago(t.created_at)}${t.attempts ? ` · attempt ${t.attempts}` : ""}</div>
+      </div>
+      <div>${stepper(t)}</div>
+      <div class="state">${badge(t)}<div class="since">updated ${ago(t.updated_at)}</div></div>
+    </div>`).join("");
+}
+
+function logHtml(text) {
+  if (!text) return `<span class="l-dim">No agent activity yet.</span>`;
+  return text.split("\n").filter(Boolean).map(line => {
+    let cls = "l-dim";
+    if (line.startsWith("[claude]")) cls = "l-claude";
+    else if (line.startsWith("[tool]")) cls = "l-tool";
+    else if (line.startsWith("[fail]")) cls = "l-fail";
+    else if (line.startsWith("[check]") || line.startsWith("[git]") || line.startsWith("[result] success")) cls = "l-ok";
+    else if (line.startsWith("---")) cls = "l-sep";
+    return `<div class="${cls}">${esc(line)}</div>`;
+  }).join("");
+}
+
+function renderDrawer() {
+  const t = tickets.find(x => x.id === selected);
+  if (!t) { closeDrawer(); return; }
+  const tr = t.triage || {};
+  const logEl = $("drawer-body").querySelector(".log");
+  const stick = !logEl || logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 30;
+  const prevScroll = logEl ? logEl.scrollTop : 0;
+  const bodyScroll = $("drawer-body").scrollTop;
+  const secretInput = $("secret");
+  const typedSecret = secretInput ? secretInput.value : recall("autofix-secret");
+  const note = $("approve-note") ? $("approve-note").outerHTML : "";
+
+  $("drawer-title").innerHTML = `
+    <div><span class="tid">${esc(t.id)}</span>${t.external_id ? `<span class="ext">${esc(t.external_id)}</span>` : ""}${t.risk ? `<span class="risk ${esc(t.risk)}">${esc(t.risk)}</span>` : ""}</div>
+    <h3>${esc(t.title)}</h3>
+    <div style="margin-top:8px">${badge(t)}</div>`;
+
+  const blocks = [];
+  blocks.push(`<div class="block"><h4>Progress</h4>${stepper(t)}</div>`);
+
+  if (t.error) blocks.push(`<div class="block"><h4>${t.status === "NEW" ? "Waiting" : "Error"}</h4><div class="errbox">${esc(t.error)}</div></div>`);
+
+  blocks.push(`<div class="block"><h4>Ticket</h4><dl class="kv">
+    <dt>Reporter</dt><dd>${esc(t.reporter_name || "anonymous")}${t.reporter_email ? ` · ${esc(t.reporter_email)}` : ""}</dd>
+    <dt>Page</dt><dd>${esc(t.page_url || "—")}</dd>
+    <dt>Source</dt><dd>${esc(t.source || "—")}</dd>
+    <dt>Reported</dt><dd>${when(t.created_at)}</dd>
+    <dt>Last update</dt><dd>${when(t.updated_at)} (${ago(t.updated_at)})</dd>
+    ${t.deployed_at ? `<dt>Went live</dt><dd>${when(t.deployed_at)}</dd>` : ""}
+    ${t.commit_sha ? `<dt>Commit</dt><dd class="tid">${esc(t.commit_sha.slice(0, 10))}</dd>` : ""}
+    ${t.run_url ? `<dt>Deploy run</dt><dd><a href="${esc(t.run_url)}" target="_blank" rel="noopener">GitHub Actions ↗</a></dd>` : ""}
+  </dl></div>`);
+
+  blocks.push(`<div class="block"><h4>Description</h4><div class="prose">${esc(t.description)}</div></div>`);
+
+  if (t.triage) {
+    const conf = Math.round((tr.confidence || 0) * 100);
+    blocks.push(`<div class="block"><h4>🔮 Gemma's verdict</h4><dl class="kv">
+      <dt>Risk</dt><dd><span class="risk ${esc(tr.risk)}" style="margin:0">${esc(tr.risk)}</span>${tr.guardrail ? ` <span class="hint">guardrail: ${esc(tr.guardrail)}</span>` : ""}</dd>
+      <dt>Confidence</dt><dd>${conf}%<div class="conf"><span style="width:${conf}%"></span></div></dd>
+      ${tr.category ? `<dt>Category</dt><dd>${esc(tr.category)}</dd>` : ""}
+      ${tr.summary ? `<dt>Summary</dt><dd>${esc(tr.summary)}</dd>` : ""}
+      ${tr.likely_area ? `<dt>Likely area</dt><dd>${esc(tr.likely_area)}</dd>` : ""}
+      ${tr.reason ? `<dt>Reason</dt><dd>${esc(tr.reason)}</dd>` : ""}
+    </dl></div>`);
+    if (tr.clarifying_questions && tr.clarifying_questions.length)
+      blocks.push(`<div class="block"><h4>❓ Questions for the reporter</h4><ol class="questions">${tr.clarifying_questions.map(q => `<li>${esc(q)}</li>`).join("")}</ol></div>`);
+  }
+  if (t.task_spec) blocks.push(`<div class="block"><h4>📜 Task spec sent to Claude</h4><div class="prose">${esc(t.task_spec)}</div></div>`);
+
+  blocks.push(`<div class="block"><h4>🧪 Claude's cauldron (live log)</h4><div class="log">${logHtml(t.agent_log)}</div></div>`);
+
+  if (APPROVABLE.has(t.status)) {
+    blocks.push(`<div class="block"><h4>🧙 Send to Claude anyway</h4>
+      <div class="approve">
+        <input id="secret" type="password" placeholder="X-AutoFix-Secret" value="${esc(typedSecret)}" autocomplete="off">
+        <button class="btn" id="approve" ${t.task_spec ? "" : "disabled"}>Approve</button>
+      </div>
+      ${note || `<div class="note" id="approve-note">${t.task_spec ? "Re-queues this ticket for the Claude worker." : "No task spec from triage yet, so it can't be approved."}</div>`}
+    </div>`);
+  }
+
+  $("drawer-body").innerHTML = blocks.join("");
+  $("drawer-body").scrollTop = bodyScroll;
+  const newLog = $("drawer-body").querySelector(".log");
+  newLog.scrollTop = stick ? newLog.scrollHeight : prevScroll;
+  const btn = $("approve");
+  if (btn) btn.onclick = () => approve(t.id);
+}
+
+function render() {
+  renderStats();
+  renderFlow();
+  renderChips();
+  renderTickets();
+  if (selected) renderDrawer();
+}
+
+// ---------- drawer ----------
+function openDrawer(id) {
+  const changed = selected !== id;
+  selected = id;
+  if (changed) $("drawer-body").innerHTML = "";
+  renderDrawer();
+  renderTickets();
+  $("drawer").classList.add("open");
+  $("scrim").classList.add("open");
+}
+function closeDrawer() {
+  selected = null;
+  $("drawer").classList.remove("open");
+  $("scrim").classList.remove("open");
+  renderTickets();
+}
+
+async function approve(id) {
+  const secret = $("secret").value.trim();
+  const note = $("approve-note");
+  if (!secret) { note.className = "note bad"; note.textContent = "Enter the AutoFix secret first."; return; }
+  try { sessionStorage.setItem("autofix-secret", secret); } catch { }
+  $("approve").disabled = true;
+  try {
+    const res = await fetch(`/api/tickets/${encodeURIComponent(id)}/approve`, {
+      method: "POST", headers: { "X-AutoFix-Secret": secret },
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`);
+    note.className = "note good";
+    note.textContent = "Queued. Claude will pick it up shortly.";
+    poll();
+  } catch (e) {
+    note.className = "note bad";
+    note.textContent = `Approve failed: ${e.message}`;
+    $("approve").disabled = false;
+  }
+}
+
+// ---------- events ----------
+$("chips").addEventListener("click", e => {
+  const b = e.target.closest("[data-filter]");
+  if (!b) return;
+  filter = b.dataset.filter;
+  renderChips();
+  renderTickets();
+});
+$("search").addEventListener("input", e => { query = e.target.value; renderTickets(); });
+$("tickets").addEventListener("click", e => {
+  const row = e.target.closest(".ticket");
+  if (row) openDrawer(row.dataset.id);
+});
+$("tickets").addEventListener("keydown", e => {
+  const row = e.target.closest(".ticket");
+  if (row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openDrawer(row.dataset.id); }
+});
+$("close").onclick = closeDrawer;
+$("scrim").onclick = closeDrawer;
+document.addEventListener("keydown", e => { if (e.key === "Escape" && selected) closeDrawer(); });
+
+// ---------- polling ----------
+function setPulse() {
+  const p = $("pulse");
+  if (failures && !lastOk) { p.classList.add("down"); $("pulse-text").textContent = "Séance lost — API unreachable"; return; }
+  if (failures) { p.classList.add("down"); $("pulse-text").textContent = `Séance lost · last seen ${ago(lastOk)}`; return; }
+  p.classList.remove("down");
+  $("pulse-text").textContent = `Spirits listening · updated ${ago(lastOk)}`;
+}
+
+async function poll() {
+  try {
+    const res = await fetch("/api/tickets", { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text = await res.text();
+    lastOk = new Date().toISOString();
+    failures = 0;
+    // Rebuilding the list on every poll would eat clicks; only redraw on change
+    // (or every 30s so the "x ago" labels stay fresh).
+    if (text !== lastText || Date.now() - lastRender > 30000) {
+      lastText = text;
+      lastRender = Date.now();
+      tickets = JSON.parse(text);
+      render();
+    }
+  } catch {
+    failures++;
+  }
+  setPulse();
+}
+
+poll();
+setInterval(poll, POLL_MS);
+setInterval(setPulse, 1000);
+</script>
+</body>
+</html>

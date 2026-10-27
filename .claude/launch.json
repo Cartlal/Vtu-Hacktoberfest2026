@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "trick-or-commit",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--disable-warning=ExperimentalWarning", "trick-or-commit/backend/src/server.js"],
+      "port": 4000
+    },
+    {
+      "name": "helpdesk",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--disable-warning=ExperimentalWarning", "helpdesk/src/server.js"],
+      "port": 5050
+    },
+    {
+      "name": "autofix",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--app-dir", "autofix", "--port", "8000"],
+      "port": 8000
+    }
+  ]
+}

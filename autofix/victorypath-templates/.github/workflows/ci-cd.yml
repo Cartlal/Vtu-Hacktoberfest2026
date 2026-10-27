@@ -1,0 +1,179 @@
+name: VictoryPath CI/CD
+
+# CI runs on every push/PR across all branches (free GitHub-hosted runners).
+# CD (deploy) fires only on a push directly to `Production`, after CI passes.
+# main is not involved in deploy at all -- pushing/merging into main never
+# triggers a deploy, regardless of content.
+# Connects directly to the production server via SSH on port 4545.
+#
+# AutoFix additions (marked "AutoFix" below), all inside the deploy job:
+#   - reports deploy progress for AutoFix tickets (VP-<n> in commit messages)
+#   - health-checks the site after deploying
+#   - if an AutoFix commit breaks the deploy, reverts it on Production and
+#     redeploys the previous code. Human pushes are never auto-reverted.
+# New settings: secret AUTOFIX_SECRET; variables AUTOFIX_URL, HEALTH_URL.
+
+"on":
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # 1. Backend CI — syntax check every .js file (no secrets needed)
+  # ─────────────────────────────────────────────────────────────────────────
+  backend-ci:
+    name: Backend – Syntax Check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax check (node --check)
+        run: |
+          find . -name "*.js" -not -path "./node_modules/*" -print0 \
+            | xargs -0 -n1 node --check
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # 2. Frontend CI — lint + production build
+  # ─────────────────────────────────────────────────────────────────────────
+  frontend-ci:
+    name: Frontend – Lint & Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Production build
+        run: npm run build
+        env:
+          VITE_API_BASE_URL: https://victorypath.kletech.ac.in
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # 3. Deploy — push to `Production` only, after CI passes
+  # ─────────────────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to Production Server
+    needs: [backend-ci, frontend-ci]
+    if: github.ref == 'refs/heads/Production' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # AutoFix: one deploy at a time; the rollback step pushes a revert commit.
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    env:
+      AUTOFIX_URL: ${{ vars.AUTOFIX_URL }}
+      AUTOFIX_SECRET: ${{ secrets.AUTOFIX_SECRET }}
+      HEALTH_URL: ${{ vars.HEALTH_URL || 'https://victorypath.kletech.ac.in/' }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+    steps:
+      # AutoFix: which tickets does this push contain?
+      - name: Find AutoFix tickets
+        id: tickets
+        env:
+          MESSAGES: ${{ join(github.event.commits.*.message, ' ') }}
+        run: |
+          ids=$(printf '%s' "$MESSAGES" | grep -oE 'VP-[0-9]+' | sort -u | paste -sd, - || true)
+          echo "ids=$ids" >> "$GITHUB_OUTPUT"
+          echo "AutoFix tickets: ${ids:-none}"
+
+      - name: Tell AutoFix the deploy started
+        if: steps.tickets.outputs.ids != '' && env.AUTOFIX_URL != ''
+        env:
+          IDS: ${{ steps.tickets.outputs.ids }}
+        run: |
+          jq -n --arg ids "$IDS" --arg run "$RUN_URL" --arg sha "$GITHUB_SHA" \
+            '{ticket_ids: ($ids | split(",")), status: "started", run_url: $run, sha: $sha}' |
+          curl -sS -m 15 -X POST "$AUTOFIX_URL/api/deploy-status" \
+            -H "Content-Type: application/json" -H "X-AutoFix-Secret: $AUTOFIX_SECRET" -d @- || true
+
+      - name: Deploy via SSH
+        id: deploy
+        uses: appleboy/ssh-action@v1
+        with:
+          host:     victorypath.kletech.ac.in
+          username: ${{ secrets.DEPLOY_USER }}
+          key:      ${{ secrets.DEPLOY_SSH_KEY }}
+          port:     4545
+          script: |
+            powershell -ExecutionPolicy Bypass -File "${{ secrets.DEPLOY_PATH }}\deploy\deploy.ps1" -GitToken "${{ secrets.GIT_TOKEN }}"
+
+      # AutoFix: PM2 restarts asynchronously, so give it up to a minute.
+      - name: Health check
+        run: |
+          for i in $(seq 1 12); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$HEALTH_URL" || true)
+            echo "attempt $i: HTTP $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 5
+          done
+          echo "Health check failed"; exit 1
+
+      # AutoFix: only AutoFix commits are rolled back automatically, and only
+      # if nothing newer has landed on Production since.
+      - name: Revert the AutoFix commit
+        id: revert
+        if: failure() && steps.deploy.outcome != 'skipped' && steps.tickets.outputs.ids != ''
+        run: |
+          git clone --quiet --branch Production \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" repo
+          cd repo
+          if [ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]; then
+            echo "Production moved on since this deploy; not reverting automatically."; exit 1
+          fi
+          git config user.name "AutoFix Bot"
+          git config user.email "autofix-bot@users.noreply.github.com"
+          git revert --no-edit "${{ github.event.before }}..$GITHUB_SHA"
+          git push origin HEAD:Production
+
+      # A push made with the workflow token doesn't trigger a new run, so redeploy here.
+      - name: Redeploy previous version
+        if: failure() && steps.revert.outcome == 'success'
+        uses: appleboy/ssh-action@v1
+        with:
+          host:     victorypath.kletech.ac.in
+          username: ${{ secrets.DEPLOY_USER }}
+          key:      ${{ secrets.DEPLOY_SSH_KEY }}
+          port:     4545
+          script: |
+            powershell -ExecutionPolicy Bypass -File "${{ secrets.DEPLOY_PATH }}\deploy\deploy.ps1" -GitToken "${{ secrets.GIT_TOKEN }}"
+
+      - name: Report result to AutoFix
+        if: always() && steps.tickets.outputs.ids != '' && env.AUTOFIX_URL != ''
+        env:
+          IDS: ${{ steps.tickets.outputs.ids }}
+          RESULT: ${{ job.status == 'success' && 'success' || 'failure' }}
+        run: |
+          jq -n --arg ids "$IDS" --arg status "$RESULT" --arg run "$RUN_URL" --arg sha "$GITHUB_SHA" \
+            '{ticket_ids: ($ids | split(",")), status: $status, run_url: $run, sha: $sha}' |
+          curl -sS -m 15 -X POST "$AUTOFIX_URL/api/deploy-status" \
+            -H "Content-Type: application/json" -H "X-AutoFix-Secret: $AUTOFIX_SECRET" -d @- || true
