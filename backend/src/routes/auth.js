@@ -14,24 +14,31 @@ router.post('/register', asyncRoute(async (req, res) => {
   if (name.length < 2) throw new HttpError(400, 'Enter your name.');
   if (!EMAIL_RE.test(email)) throw new HttpError(400, 'Enter a valid email address.');
   if (password.length < 8) throw new HttpError(400, 'Password must be at least 8 characters.');
-  if (db.get().prepare('SELECT 1 FROM users WHERE email = ?').get(email)) {
+  if (await db.col('users').findOne({ email })) {
     throw new HttpError(409, 'An account with that email already exists. Sign in instead.');
   }
-  const hash = await bcrypt.hash(password, 10);
-  const { lastInsertRowid } = db.get()
-    .prepare('INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)').run(name, email, hash);
-  const user = publicUser(db.get().prepare('SELECT * FROM users WHERE id = ?').get(lastInsertRowid));
+  const doc = {
+    _id: await db.nextSeq('store_users'), name, email,
+    passwordHash: await bcrypt.hash(password, 10), role: 'customer', createdAt: new Date()
+  };
+  try {
+    await db.col('users').insertOne(doc);
+  } catch (err) {
+    if (err.code === 11000) throw new HttpError(409, 'An account with that email already exists. Sign in instead.');
+    throw err;
+  }
+  const user = publicUser(doc);
   res.status(201).json({ token: signToken(user), user });
 }));
 
 router.post('/login', asyncRoute(async (req, res) => {
   const email = String(req.body.email || '').trim().toLowerCase();
   const password = String(req.body.password || '');
-  const row = db.get().prepare('SELECT * FROM users WHERE email = ?').get(email);
-  if (!row || !(await bcrypt.compare(password, row.password_hash))) {
+  const doc = await db.col('users').findOne({ email });
+  if (!doc || !(await bcrypt.compare(password, doc.passwordHash))) {
     throw new HttpError(401, 'Wrong email or password.');
   }
-  const user = publicUser(row);
+  const user = publicUser(doc);
   res.json({ token: signToken(user), user });
 }));
 

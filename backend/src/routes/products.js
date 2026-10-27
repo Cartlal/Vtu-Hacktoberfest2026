@@ -1,58 +1,56 @@
 const express = require('express');
 const db = require('../db');
 const { CATEGORIES } = require('../seed');
-const { HttpError } = require('../errors');
+const { HttpError, asyncRoute } = require('../errors');
 
 const router = express.Router();
 
 const SORTS = {
-  featured: 'featured DESC, rating_count DESC',
-  'price-asc': 'price ASC',
-  'price-desc': 'price DESC',
-  rating: 'rating DESC, rating_count DESC',
-  newest: 'id DESC'
+  featured: { featured: -1, ratingCount: -1 },
+  'price-asc': { price: 1 },
+  'price-desc': { price: -1 },
+  rating: { rating: -1, ratingCount: -1 },
+  newest: { _id: -1 }
 };
 
-router.get('/categories', (req, res) => {
-  const counts = db.get().prepare(
-    'SELECT category, COUNT(*) AS n FROM products WHERE active = 1 GROUP BY category'
-  ).all();
-  const byId = Object.fromEntries(counts.map((c) => [c.category, c.n]));
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+router.get('/categories', asyncRoute(async (req, res) => {
+  const counts = await db.col('products').aggregate([
+    { $match: { active: true } }, { $group: { _id: '$category', n: { $sum: 1 } } }
+  ]).toArray();
+  const byId = Object.fromEntries(counts.map((c) => [c._id, c.n]));
   res.json(CATEGORIES.map((c) => ({ ...c, count: byId[c.id] || 0 })));
-});
+}));
 
 // GET /api/products?category=tees&q=ghost&size=M&min=500&max=1500&sort=price-asc&featured=1
 // min/max are in rupees.
-router.get('/products', (req, res) => {
+router.get('/products', asyncRoute(async (req, res) => {
   const { category, q, size, min, max, sort, featured } = req.query;
-  const where = ['active = 1'];
-  const args = [];
-  if (category) { where.push('category = ?'); args.push(String(category)); }
+  const filter = { active: true };
+  if (category) filter.category = String(category);
   if (q) {
-    where.push('(name LIKE ? OR description LIKE ?)');
-    const like = `%${String(q).slice(0, 60)}%`;
-    args.push(like, like);
+    const re = new RegExp(escapeRegex(String(q).slice(0, 60)), 'i');
+    filter.$or = [{ name: re }, { description: re }];
   }
-  if (min && !Number.isNaN(Number(min))) { where.push('price >= ?'); args.push(Math.round(Number(min) * 100)); }
-  if (max && !Number.isNaN(Number(max))) { where.push('price <= ?'); args.push(Math.round(Number(max) * 100)); }
-  if (featured === '1') where.push('featured = 1');
+  if (size) filter.sizes = String(size);
+  const price = {};
+  if (min && !Number.isNaN(Number(min))) price.$gte = Math.round(Number(min) * 100);
+  if (max && !Number.isNaN(Number(max))) price.$lte = Math.round(Number(max) * 100);
+  if (Object.keys(price).length) filter.price = price;
+  if (featured === '1') filter.featured = true;
 
-  const orderBy = SORTS[sort] || SORTS.featured;
-  let products = db.get().prepare(`SELECT * FROM products WHERE ${where.join(' AND ')} ORDER BY ${orderBy}`)
-    .all(...args).map(db.productFromRow);
-  if (size) products = products.filter((p) => p.sizes.includes(String(size)));
-  res.json(products);
-});
+  const docs = await db.col('products').find(filter).sort(SORTS[sort] || SORTS.featured).toArray();
+  res.json(docs.map(db.productOut));
+}));
 
-router.get('/products/:slug', (req, res) => {
-  const product = db.productFromRow(
-    db.get().prepare('SELECT * FROM products WHERE slug = ? AND active = 1').get(req.params.slug)
-  );
+router.get('/products/:slug', asyncRoute(async (req, res) => {
+  const product = db.productOut(await db.col('products').findOne({ slug: req.params.slug, active: true }));
   if (!product) throw new HttpError(404, 'Product not found.');
-  const related = db.get().prepare(
-    'SELECT * FROM products WHERE category = ? AND id != ? AND active = 1 ORDER BY rating_count DESC LIMIT 4'
-  ).all(product.category, product.id).map(db.productFromRow);
-  res.json({ ...product, related });
-});
+  const related = await db.col('products')
+    .find({ category: product.category, _id: { $ne: product.id }, active: true })
+    .sort({ ratingCount: -1 }).limit(4).toArray();
+  res.json({ ...product, related: related.map(db.productOut) });
+}));
 
 module.exports = router;

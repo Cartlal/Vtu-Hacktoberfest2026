@@ -7,8 +7,7 @@ process.env.SMEPAY_CLIENT_SECRET = 'test-secret';
 delete process.env.RAZORPAY_KEY_ID;
 delete process.env.PAYMENT_PROVIDER;
 
-const db = require('../src/db');
-db.open(':memory:');
+const testdb = require('./testdb');
 const app = require('../src/app');
 const payments = require('../src/payments');
 
@@ -19,6 +18,7 @@ let server;
 let base;
 
 before(async () => {
+  await testdb.open();
   fake = http.createServer((req, res) => {
     let raw = '';
     req.on('data', (c) => { raw += c; });
@@ -51,7 +51,7 @@ before(async () => {
   await new Promise((r) => server.once('listening', r));
   base = `http://127.0.0.1:${server.address().port}`;
 });
-after(() => { server.close(); fake.close(); });
+after(async () => { server.close(); fake.close(); await testdb.close(); });
 
 async function call(method, path, body) {
   const res = await fetch(base + path, {

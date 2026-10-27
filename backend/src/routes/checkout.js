@@ -16,10 +16,9 @@ router.get('/payment-config', (req, res) => {
 });
 
 // Price preview for the cart page (coupon check, shipping) without creating an order.
-router.post('/quote', (req, res) => {
-  const quote = priceCart(req.body.items, { coupon: req.body.coupon, delivery: req.body.delivery });
-  res.json(quote);
-});
+router.post('/quote', asyncRoute(async (req, res) => {
+  res.json(await priceCart(req.body.items, { coupon: req.body.coupon, delivery: req.body.delivery }));
+}));
 
 function validateCustomer(body) {
   const customer = {
@@ -53,38 +52,38 @@ function validateCustomer(body) {
 // Creates a pending order and the matching payment-gateway order.
 router.post('/', optionalAuth, asyncRoute(async (req, res) => {
   const customer = validateCustomer(req.body);
-  const quote = priceCart(req.body.items, { coupon: req.body.coupon, delivery: customer.delivery });
+  const quote = await priceCart(req.body.items, { coupon: req.body.coupon, delivery: customer.delivery });
   if (req.body.coupon && quote.couponError) throw new HttpError(400, quote.couponError);
 
   const order = {
-    id: db.newOrderId(),
+    _id: db.newOrderId(),
     accessToken: crypto.randomBytes(16).toString('hex'),
-    total: quote.total
+    userId: req.user?.id ?? null,
+    name: customer.name, email: customer.email, phone: customer.phone,
+    delivery: customer.delivery, address: customer.address,
+    items: quote.lines,
+    subtotal: quote.subtotal, discount: quote.discount, shipping: quote.shipping, total: quote.total,
+    coupon: quote.coupon,
+    status: 'pending_payment', paymentProvider: null, paymentOrderId: null, paymentId: null,
+    createdAt: new Date(), paidAt: null
   };
-  db.get().prepare(`
-    INSERT INTO orders (id, access_token, user_id, name, email, phone, delivery, address, items,
-                        subtotal, discount, shipping, total, coupon)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-    order.id, order.accessToken, req.user?.id ?? null, customer.name, customer.email, customer.phone,
-    customer.delivery, customer.address ? JSON.stringify(customer.address) : null, JSON.stringify(quote.lines),
-    quote.subtotal, quote.discount, quote.shipping, quote.total, quote.coupon
-  );
+  await db.col('orders').insertOne(order);
 
   let payment;
   try {
     payment = await payments.createPayment(
-      { ...order, customer },
-      { callbackUrl: `${publicUrl(req)}/api/payments/smepay/callback?order=${order.id}` }
+      { id: order._id, total: order.total, customer },
+      { callbackUrl: `${publicUrl(req)}/api/payments/smepay/callback?order=${order._id}` }
     );
   } catch (err) {
-    db.get().prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?").run(order.id);
+    await db.col('orders').updateOne({ _id: order._id }, { $set: { status: 'cancelled' } });
     throw err;
   }
-  db.get().prepare('UPDATE orders SET payment_provider = ?, payment_order_id = ? WHERE id = ?')
-    .run(payment.provider, payment.paymentOrderId, order.id);
+  await db.col('orders').updateOne({ _id: order._id },
+    { $set: { paymentProvider: payment.provider, paymentOrderId: payment.paymentOrderId } });
 
   res.status(201).json({
-    orderId: order.id,
+    orderId: order._id,
     accessToken: order.accessToken,
     total: quote.total,
     payment: { provider: payment.provider, ...(payment.checkout || {}) },
@@ -92,59 +91,65 @@ router.post('/', optionalAuth, asyncRoute(async (req, res) => {
   });
 }));
 
-// Confirms payment, then atomically re-checks and decrements stock.
+// Confirms payment with the gateway, then takes the stock and marks the order paid.
 router.post('/:id/verify', asyncRoute(async (req, res) => {
-  const row = db.get().prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id);
-  if (!row || row.access_token !== req.body.accessToken) throw new HttpError(404, 'Order not found.');
-  if (row.status === 'paid') return res.json(db.orderFromRow(row));
-  if (row.status !== 'pending_payment') throw new HttpError(409, `This order is ${row.status.replace('_', ' ')}.`);
+  const order = await db.col('orders').findOne({ _id: req.params.id });
+  if (!order || order.accessToken !== req.body.accessToken) throw new HttpError(404, 'Order not found.');
+  if (order.status === 'paid') return res.json(db.orderOut(order));
+  if (order.status !== 'pending_payment') throw new HttpError(409, `This order is ${order.status.replace('_', ' ')}.`);
 
   let paymentId;
-  if (row.payment_provider === 'smepay') {
-    const check = await payments.validateSmepay(row.payment_order_id, row.total);
+  if (order.paymentProvider === 'smepay') {
+    const check = await payments.validateSmepay(order.paymentOrderId, order.total);
     if (!check.paid) {
       throw new HttpError(400, check.status === 'FAILED'
         ? 'The payment failed. You have not been charged; please try again.'
         : 'We have not received the payment yet. If you paid, wait a moment and refresh your order page.');
     }
-    paymentId = `smepay_${row.payment_order_id}`;
-  } else if (row.payment_provider === 'razorpay') {
+    paymentId = `smepay_${order.paymentOrderId}`;
+  } else if (order.paymentProvider === 'razorpay') {
     const { razorpay_order_id: rzpOrder, razorpay_payment_id: rzpPayment, razorpay_signature: sig } = req.body;
-    if (rzpOrder !== row.payment_order_id || !payments.verifyRazorpaySignature(rzpOrder, rzpPayment, sig)) {
+    if (rzpOrder !== order.paymentOrderId || !payments.verifyRazorpaySignature(rzpOrder, rzpPayment, sig)) {
       throw new HttpError(400, 'Payment could not be verified.');
     }
     paymentId = rzpPayment;
-  } else if (row.payment_provider === 'demo' && payments.mode() === 'demo') {
+  } else if (order.paymentProvider === 'demo' && payments.mode() === 'demo') {
     paymentId = `demo_${crypto.randomBytes(6).toString('hex')}`;
   } else {
     throw new HttpError(400, 'Payment could not be verified.');
   }
 
-  res.json(fulfil(row, paymentId));
+  res.json(await fulfil(order, paymentId));
 }));
 
-// Marks a verified payment as paid, atomically re-checking and decrementing
-// stock. Shared by /verify and the SMEPay webhook. Returns the order.
-function fulfil(row, paymentId) {
-  const current = db.get().prepare('SELECT * FROM orders WHERE id = ?').get(row.id);
-  if (current.status !== 'pending_payment') return db.orderFromRow(current);   // already handled
-  const items = JSON.parse(row.items);
-  const soldOut = db.tx(() => {
-    const getStock = db.get().prepare('SELECT stock FROM products WHERE id = ?');
-    const takeStock = db.get().prepare('UPDATE products SET stock = stock - ? WHERE id = ?');
-    const missing = items.find((item) => (getStock.get(item.productId)?.stock ?? 0) < item.qty);
-    if (missing) return missing;
-    for (const item of items) takeStock.run(item.qty, item.productId);
-    db.get().prepare("UPDATE orders SET status = 'paid', payment_id = ?, paid_at = datetime('now') WHERE id = ?")
-      .run(paymentId, row.id);
-    return null;
-  });
-  if (soldOut) {
-    // Paid but unfulfillable: cancel and keep the payment id so an admin can refund it.
-    db.get().prepare("UPDATE orders SET status = 'cancelled', payment_id = ? WHERE id = ?").run(paymentId, row.id);
-    throw new HttpError(409, `${soldOut.name} sold out while you were paying. Your order was cancelled and the payment will be refunded.`);
+// Takes stock for a verified payment and marks the order paid. Shared by /verify and
+// the SMEPay webhook; safe to call twice (only one call can move it out of pending).
+// Each item is decremented only if enough stock is left; on a shortfall the items
+// already taken are put back and the paid order is cancelled for a refund.
+async function fulfil(order, paymentId) {
+  const products = db.col('products');
+  const taken = [];
+  let soldOut = null;
+  for (const item of order.items) {
+    const r = await products.updateOne({ _id: item.productId, stock: { $gte: item.qty } }, { $inc: { stock: -item.qty } });
+    if (r.modifiedCount === 0) { soldOut = item; break; }
+    taken.push(item);
   }
-  return db.orderFromRow(db.get().prepare('SELECT * FROM orders WHERE id = ?').get(row.id));
+  const putBack = () => Promise.all(taken.map((i) => products.updateOne({ _id: i.productId }, { $inc: { stock: i.qty } })));
+
+  if (soldOut) {
+    await putBack();
+    const r = await db.col('orders').updateOne({ _id: order._id, status: 'pending_payment' },
+      { $set: { status: 'cancelled', paymentId } });
+    if (r.modifiedCount === 1) {
+      throw new HttpError(409, `${soldOut.name} sold out while you were paying. Your order was cancelled and the payment will be refunded.`);
+    }
+  } else {
+    const r = await db.col('orders').updateOne({ _id: order._id, status: 'pending_payment' },
+      { $set: { status: 'paid', paymentId, paidAt: new Date() } });
+    if (r.modifiedCount === 0) await putBack();   // another call got there first
+  }
+  return db.orderOut(await db.col('orders').findOne({ _id: order._id }));
 }
 
 // Public base URL for gateway callbacks: PUBLIC_URL if set, else this request's host

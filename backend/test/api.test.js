@@ -7,8 +7,7 @@ process.env.ADMIN_PASSWORD = 'admin-password-123';
 delete process.env.RAZORPAY_KEY_ID;
 delete process.env.RAZORPAY_KEY_SECRET;
 
-const db = require('../src/db');
-db.open(':memory:');
+const testdb = require('./testdb');
 const app = require('../src/app');
 const payments = require('../src/payments');
 
@@ -16,11 +15,12 @@ let server;
 let base;
 
 before(async () => {
+  await testdb.open();
   server = app.listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
   base = `http://127.0.0.1:${server.address().port}/api`;
 });
-after(() => server.close());
+after(async () => { server.close(); await testdb.close(); });
 
 async function api(method, path, body, token) {
   const res = await fetch(base + path, {

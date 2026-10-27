@@ -34,11 +34,13 @@ function couponDiscount(code, subtotal) {
  * Returns { lines, subtotal, discount, shipping, total, coupon, couponError }.
  * Throws HttpError(400) for anything the customer must fix (stock, sizes, ...).
  */
-function priceCart(items, { coupon, delivery = 'shipping' } = {}) {
+async function priceCart(items, { coupon, delivery = 'shipping' } = {}) {
   if (!Array.isArray(items) || items.length === 0) throw new HttpError(400, 'Your cart is empty.');
   if (items.length > MAX_LINES) throw new HttpError(400, `At most ${MAX_LINES} different items per order.`);
 
-  const getProduct = db.get().prepare('SELECT * FROM products WHERE id = ? AND active = 1');
+  const ids = [...new Set(items.map((i) => Number(i?.productId)).filter(Number.isInteger))];
+  const found = await db.col('products').find({ _id: { $in: ids }, active: true }).toArray();
+  const byId = new Map(found.map((p) => [p._id, db.productOut(p)]));
   const lines = [];
   const qtyByProduct = new Map();
 
@@ -47,7 +49,7 @@ function priceCart(items, { coupon, delivery = 'shipping' } = {}) {
     if (!Number.isInteger(qty) || qty < 1 || qty > MAX_QTY) {
       throw new HttpError(400, `Quantity must be between 1 and ${MAX_QTY}.`);
     }
-    const product = db.productFromRow(getProduct.get(Number(item.productId)));
+    const product = byId.get(Number(item.productId));
     if (!product) throw new HttpError(400, 'An item in your cart is no longer available.');
     if (!product.sizes.includes(item.size)) {
       throw new HttpError(400, `Pick a valid size for ${product.name}.`);

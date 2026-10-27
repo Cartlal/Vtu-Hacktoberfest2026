@@ -22,13 +22,12 @@ router.post('/smepay/callback', (req, res) => {
   res.status(200).json({ received: true });
   if (!ORDER_ID_RE.test(id)) return;
 
-  const row = db.get().prepare('SELECT * FROM orders WHERE id = ?').get(id);
-  if (!row || row.payment_provider !== 'smepay' || row.status !== 'pending_payment') return;
-  payments.validateSmepay(row.payment_order_id, row.total)
-    .then((check) => {
-      if (check.paid) fulfil(row, `smepay_${row.payment_order_id}`);
-    })
-    .catch((err) => console.error(`SMEPay webhook for ${id} failed:`, err.message));
+  (async () => {
+    const order = await db.col('orders').findOne({ _id: id });
+    if (!order || order.paymentProvider !== 'smepay' || order.status !== 'pending_payment') return;
+    const check = await payments.validateSmepay(order.paymentOrderId, order.total);
+    if (check.paid) await fulfil(order, `smepay_${order.paymentOrderId}`);
+  })().catch((err) => console.error(`SMEPay webhook for ${id} failed:`, err.message));
 });
 
 module.exports = router;

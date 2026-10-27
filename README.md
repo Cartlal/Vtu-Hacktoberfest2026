@@ -26,8 +26,9 @@ accounts and an admin dashboard. React frontend, Node/Express backend, one Rende
   (click, drag and drop, or paste with Ctrl+V; PNG/JPEG/GIF/WebP, 3 MB each, checked by file content), contact
   details and optional browser info. Reporters get a private tracking page (`/ticket/:id`) with status, timeline and
   comments; signed-in users see "Your reports" on their account. Admins triage in the **Tickets** tab.
-- **AutoFix hook**: with `AUTOFIX_URL` and `AUTOFIX_SECRET` set, new tickets are forwarded to AutoFix (Gemma triage +
-  Claude auto-fix), which posts progress back to `POST /api/autofix/bugs/:id/update` onto the ticket's timeline.
+- **Helpdesk + AutoFix**: tickets are written straight into the Lantern Desk helpdesk's MongoDB collections (same
+  database). The helpdesk, running next to AutoFix, forwards them for Gemma triage and Claude auto-fix; agent replies
+  and AutoFix progress show on the store's tracking page, and answering AutoFix's questions here re-triages.
 
 Coupons: `HACKTOBER26` (15% off ₹999+), `GDGVTU` (₹100 off ₹599+), `SPOOKY10` (10% off).
 
@@ -35,7 +36,7 @@ Coupons: `HACKTOBER26` (15% off ₹999+), `GDGVTU` (₹100 off ₹599+), `SPOOKY
 | Part | Tech |
 |---|---|
 | Frontend | React 19, Vite, React Router, lucide-react |
-| Backend | Node 22.13+ / Express, `node:sqlite`, JWT, bcryptjs |
+| Backend | Node 22.13+ / Express, MongoDB Atlas, JWT, bcryptjs |
 | Payments | SMEPay Wizard API + checkout widget (test mode); Razorpay optional |
 | Hosting | Render web service (`render.yaml`), GitHub Actions CI |
 
@@ -56,13 +57,13 @@ forward and callback). Lint: `npm run lint`.
 ## Deploy on Render
 1. Push this repo to GitHub.
 2. Render → **New → Blueprint** → select the repo. `render.yaml` creates one free web service.
-3. In the service's **Environment**, set `ADMIN_EMAIL`, `ADMIN_PASSWORD`, and `SMEPAY_CLIENT_ID` /
+3. In the service's **Environment**, set `MONGODB_URI` (the helpdesk's Atlas cluster; allow Render in Atlas
+   Network Access), `ADMIN_EMAIL`, `ADMIN_PASSWORD`, and `SMEPAY_CLIENT_ID` /
    `SMEPAY_CLIENT_SECRET` (from app.smepay.in → Integrations; keep `SMEPAY_ENV=test`). `JWT_SECRET` is generated for you.
 4. Every push to the default branch redeploys automatically. Health check: `/api/health`.
 
-**Data on the free plan:** the database is a SQLite file on the service's disk, which Render resets on every deploy
-or restart. Products re-seed automatically; orders, accounts and subscribers start fresh. For data that survives,
-attach a Render persistent disk (paid) and set `DB_FILE` to a path on it.
+**Data:** everything is in MongoDB Atlas, so orders, accounts and tickets survive deploys. Products are seeded on
+first start. Tests use a throwaway database on the same cluster (`MONGODB_URI` in `backend/.env`).
 
 ## Project layout
 ```

@@ -12,28 +12,31 @@ function signToken(user) {
   return jwt.sign({ sub: user.id, role: user.role }, secret(), { expiresIn: TOKEN_TTL });
 }
 
-function publicUser(row) {
-  return { id: row.id, name: row.name, email: row.email, role: row.role };
+function publicUser(doc) {
+  return { id: doc._id, name: doc.name, email: doc.email, role: doc.role };
 }
 
 // Sets req.user when a valid Bearer token is present; never rejects.
 function optionalAuth(req, res, next) {
   const header = req.get('Authorization') || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
-  if (token) {
-    try {
-      const payload = jwt.verify(token, secret());
-      const row = db.get().prepare('SELECT * FROM users WHERE id = ?').get(payload.sub);
-      if (row) req.user = publicUser(row);
-    } catch {
-      // expired or tampered token: treat as signed out
-    }
+  if (!token) return next();
+  let payload;
+  try {
+    payload = jwt.verify(token, secret());
+  } catch {
+    return next(); // expired or tampered token: treat as signed out
   }
-  next();
+  db.col('users').findOne({ _id: payload.sub })
+    .then((doc) => { if (doc) req.user = publicUser(doc); next(); })
+    .catch(next);
 }
 
 function requireAuth(req, res, next) {
-  optionalAuth(req, res, () => (req.user ? next() : next(new HttpError(401, 'Please sign in.'))));
+  optionalAuth(req, res, (err) => {
+    if (err) return next(err);
+    next(req.user ? undefined : new HttpError(401, 'Please sign in.'));
+  });
 }
 
 function requireAdmin(req, res, next) {

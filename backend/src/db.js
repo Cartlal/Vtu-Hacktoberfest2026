@@ -1,279 +1,113 @@
-// SQLite through Node's built-in node:sqlite (no native dependency to build).
-// On Render's free plan the disk is reset on every deploy: products re-seed
-// automatically, orders and accounts start fresh. Point DB_FILE at a Render
-// persistent disk (paid) if they must survive deploys.
-const fs = require('node:fs');
-const path = require('node:path');
+// MongoDB storage. The store shares one database with the Lantern Desk helpdesk:
+//   store_*      - owned by the store (products, users, orders, subscribers)
+//   tickets, messages, attachments, clients, counters
+//                - owned by the helpdesk (helpdesk/src/db.js defines their shape). The store
+//                  writes its "Report a problem" tickets straight in, the helpdesk forwards
+//                  them to AutoFix, and replies plus AutoFix progress show on the store's pages.
 const crypto = require('node:crypto');
 const bcrypt = require('bcryptjs');
-const { DatabaseSync } = require('node:sqlite');
+const { MongoClient } = require('mongodb');
 const { PRODUCTS } = require('./seed');
 
-// Kept separate so migrate() can rebuild the table with the same definition.
-const TICKET_COLUMNS = `
-  id           TEXT PRIMARY KEY,
-  access_token TEXT NOT NULL,
-  user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  name         TEXT,
-  email        TEXT NOT NULL,
-  title        TEXT NOT NULL,
-  category     TEXT NOT NULL,
-  -- Set by triage (AutoFix or an admin), never by the reporter; NULL = not triaged yet.
-  severity     TEXT CHECK (severity IN ('low', 'medium', 'high', 'critical')),
-  page_url     TEXT,
-  description  TEXT NOT NULL,
-  steps        TEXT,
-  expected     TEXT,
-  actual       TEXT,
-  environment  TEXT,
-  status       TEXT NOT NULL DEFAULT 'open'
-               CHECK (status IN ('open', 'in_progress', 'resolved', 'closed', 'rejected')),
-  autofix_id   TEXT,
-  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
-`;
+const NAMES = {
+  products: 'store_products',
+  users: 'store_users',
+  orders: 'store_orders',
+  subscribers: 'store_subscribers',
+  tickets: 'tickets',
+  messages: 'messages',
+  attachments: 'attachments',
+  clients: 'clients',
+  counters: 'counters'
+};
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS users (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  name          TEXT NOT NULL,
-  email         TEXT NOT NULL UNIQUE,
-  password_hash TEXT NOT NULL,
-  role          TEXT NOT NULL DEFAULT 'customer' CHECK (role IN ('customer', 'admin')),
-  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
-);
+let client = null;
+let database = null;
 
-CREATE TABLE IF NOT EXISTS products (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  slug         TEXT NOT NULL UNIQUE,
-  name         TEXT NOT NULL,
-  category     TEXT NOT NULL,
-  description  TEXT NOT NULL,
-  price        INTEGER NOT NULL CHECK (price >= 0),
-  compare_at   INTEGER,
-  sizes        TEXT NOT NULL,
-  stock        INTEGER NOT NULL DEFAULT 0 CHECK (stock >= 0),
-  badge        TEXT,
-  rating       REAL NOT NULL DEFAULT 0,
-  rating_count INTEGER NOT NULL DEFAULT 0,
-  art          TEXT NOT NULL,
-  featured     INTEGER NOT NULL DEFAULT 0,
-  active       INTEGER NOT NULL DEFAULT 1,
-  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS orders (
-  id               TEXT PRIMARY KEY,
-  access_token     TEXT NOT NULL,
-  user_id          INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  name             TEXT NOT NULL,
-  email            TEXT NOT NULL,
-  phone            TEXT NOT NULL,
-  delivery         TEXT NOT NULL CHECK (delivery IN ('shipping', 'campus_pickup')),
-  address          TEXT,
-  items            TEXT NOT NULL,
-  subtotal         INTEGER NOT NULL,
-  discount         INTEGER NOT NULL,
-  shipping         INTEGER NOT NULL,
-  total            INTEGER NOT NULL,
-  coupon           TEXT,
-  status           TEXT NOT NULL DEFAULT 'pending_payment'
-                   CHECK (status IN ('pending_payment', 'paid', 'shipped', 'delivered', 'cancelled')),
-  payment_provider TEXT,
-  payment_order_id TEXT,
-  payment_id       TEXT,
-  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
-  paid_at          TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_orders_user ON orders (user_id, created_at);
-
-CREATE TABLE IF NOT EXISTS subscribers (
-  email      TEXT PRIMARY KEY,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
--- "Report a problem" tickets. AutoFix triages these and posts progress back.
-CREATE TABLE IF NOT EXISTS tickets (${TICKET_COLUMNS});
-CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets (status, created_at);
-
--- Screenshots live in the database (not on disk) so they survive with their ticket.
-CREATE TABLE IF NOT EXISTS ticket_attachments (
-  id        INTEGER PRIMARY KEY AUTOINCREMENT,
-  ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
-  filename  TEXT NOT NULL,
-  mime      TEXT NOT NULL,
-  size      INTEGER NOT NULL,
-  data      BLOB NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS ticket_updates (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  ticket_id   TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
-  author      TEXT NOT NULL,
-  author_role TEXT NOT NULL CHECK (author_role IN ('reporter', 'admin', 'autofix')),
-  status_from TEXT,
-  status_to   TEXT,
-  message     TEXT,
-  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_ticket_updates ON ticket_updates (ticket_id, id);
-`;
-
-let db = null;
-
-function open(file = process.env.DB_FILE || path.join(__dirname, '..', 'data', 'store.db')) {
-  if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
-  db = new DatabaseSync(file);
-  db.exec('PRAGMA foreign_keys = ON;');
-  if (file !== ':memory:') db.exec('PRAGMA journal_mode = WAL;');
-  db.exec(SCHEMA);
-  migrate();
-  seedProducts();
-  seedAdmin();
-  return db;
+async function connect(uri = process.env.MONGODB_URI, dbName = process.env.MONGODB_DB || 'lantern_desk') {
+  if (!uri) throw new Error('MONGODB_URI is not set.');
+  client = new MongoClient(uri, { serverSelectionTimeoutMS: 15000 });
+  await client.connect();
+  database = client.db(dbName);
+  await ensureIndexes();
+  await seedProducts();
+  await seedAdmin();
+  return database;
 }
 
-function get() {
-  if (!db) throw new Error('database not opened');
-  return db;
+async function close() {
+  await client?.close();
+  client = null;
+  database = null;
 }
 
-// node:sqlite has no transaction helper; this keeps multi-statement writes atomic.
-function tx(fn) {
-  db.exec('BEGIN');
-  try {
-    const result = fn();
-    db.exec('COMMIT');
-    return result;
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
+// Tests only: removes the throwaway database they ran against.
+async function dropDatabase() {
+  await database?.dropDatabase();
 }
 
-// Brings databases created by older versions up to the current schema.
-function migrate() {
-  // tickets.severity used to be required (chosen by the reporter). SQLite can't
-  // drop a NOT NULL constraint in place, so rebuild the table, keeping its rows,
-  // in SQLite's recommended order (new table, copy, drop old, rename new) so the
-  // attachment/update tables keep pointing at "tickets".
-  const severity = db.prepare('PRAGMA table_info(tickets)').all().find((c) => c.name === 'severity');
-  if (severity?.notnull) {
-    db.exec('PRAGMA foreign_keys = OFF;');
-    tx(() => {
-      db.exec(`CREATE TABLE tickets_new (${TICKET_COLUMNS});`);
-      db.exec('INSERT INTO tickets_new SELECT * FROM tickets;');
-      db.exec('DROP TABLE tickets;');
-      db.exec('ALTER TABLE tickets_new RENAME TO tickets;');
-      db.exec(SCHEMA);  // recreates the index dropped with the old table
+function col(name) {
+  if (!database) throw new Error('database not connected');
+  return database.collection(NAMES[name]);
+}
+
+// Atomic counters (product and user ids, and ticket numbers shared with the helpdesk).
+async function nextSeq(name) {
+  const doc = await col('counters').findOneAndUpdate(
+    { _id: name }, { $inc: { seq: 1 } }, { upsert: true, returnDocument: 'after' }
+  );
+  return doc.seq;
+}
+
+async function ensureIndexes() {
+  await Promise.all([
+    col('users').createIndex({ email: 1 }, { unique: true }),
+    col('products').createIndex({ slug: 1 }, { unique: true }),
+    col('orders').createIndex({ userId: 1, createdAt: -1 }),
+    col('orders').createIndex({ status: 1, paidAt: -1 }),
+    col('tickets').createIndex({ client_id: 1, created_at: -1 }),
+    col('tickets').createIndex({ store_user_id: 1, created_at: -1 }, { sparse: true })
+  ]);
+}
+
+async function seedProducts() {
+  if (await col('products').estimatedDocumentCount() > 0) return;
+  const docs = [];
+  for (const p of PRODUCTS) {
+    docs.push({
+      _id: await nextSeq('store_products'),
+      slug: p.slug, name: p.name, category: p.category, description: p.description,
+      price: p.price, compareAt: p.compareAt ?? null, sizes: p.sizes, stock: p.stock,
+      badge: p.badge ?? null, rating: p.rating, ratingCount: p.ratingCount, art: p.art,
+      featured: !!p.featured, active: true, createdAt: new Date()
     });
-    db.exec('PRAGMA foreign_keys = ON;');
   }
+  await col('products').insertMany(docs);
 }
 
-function seedProducts() {
-  if (db.prepare('SELECT COUNT(*) AS n FROM products').get().n > 0) return;
-  const insert = db.prepare(`
-    INSERT INTO products (slug, name, category, description, price, compare_at, sizes, stock, badge,
-                          rating, rating_count, art, featured)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-  tx(() => {
-    for (const p of PRODUCTS) {
-      insert.run(p.slug, p.name, p.category, p.description, p.price, p.compareAt ?? null,
-        JSON.stringify(p.sizes), p.stock, p.badge ?? null, p.rating, p.ratingCount,
-        JSON.stringify(p.art), p.featured ? 1 : 0);
-    }
+// The admin account comes from ADMIN_EMAIL / ADMIN_PASSWORD so no credentials live in the repo.
+async function seedAdmin() {
+  const email = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+  const password = process.env.ADMIN_PASSWORD || '';
+  if (!email || !password || await col('users').findOne({ email })) return;
+  await col('users').insertOne({
+    _id: await nextSeq('store_users'), name: 'Store Admin', email,
+    passwordHash: bcrypt.hashSync(password, 10), role: 'admin', createdAt: new Date()
   });
 }
 
-// The admin account comes from ADMIN_EMAIL / ADMIN_PASSWORD so no credentials
-// live in the repo. Created once; change the password by editing the env and
-// deleting the user, or extend the admin API.
-function seedAdmin() {
-  const email = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
-  const password = process.env.ADMIN_PASSWORD || '';
-  if (!email || !password) return;
-  if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) return;
-  db.prepare("INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, 'admin')")
-    .run('Store Admin', email, bcrypt.hashSync(password, 10));
+function productOut(doc) {
+  if (!doc) return null;
+  const { _id, createdAt: _c, ...rest } = doc;
+  return { id: _id, ...rest };
 }
 
-function productFromRow(row) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    slug: row.slug,
-    name: row.name,
-    category: row.category,
-    description: row.description,
-    price: row.price,
-    compareAt: row.compare_at,
-    sizes: JSON.parse(row.sizes),
-    stock: row.stock,
-    badge: row.badge,
-    rating: row.rating,
-    ratingCount: row.rating_count,
-    art: JSON.parse(row.art),
-    featured: !!row.featured,
-    active: !!row.active
-  };
+function orderOut(doc, { includeToken = false } = {}) {
+  if (!doc) return null;
+  const { _id, accessToken, paymentOrderId: _p, ...rest } = doc;
+  return { id: _id, ...rest, ...(includeToken ? { accessToken } : {}) };
 }
 
-function orderFromRow(row, { includeToken = false } = {}) {
-  if (!row) return null;
-  const order = {
-    id: row.id,
-    userId: row.user_id,
-    name: row.name,
-    email: row.email,
-    phone: row.phone,
-    delivery: row.delivery,
-    address: row.address ? JSON.parse(row.address) : null,
-    items: JSON.parse(row.items),
-    subtotal: row.subtotal,
-    discount: row.discount,
-    shipping: row.shipping,
-    total: row.total,
-    coupon: row.coupon,
-    status: row.status,
-    paymentProvider: row.payment_provider,
-    paymentId: row.payment_id,
-    createdAt: row.created_at,
-    paidAt: row.paid_at
-  };
-  if (includeToken) order.accessToken = row.access_token;
-  return order;
-}
+const newOrderId = () => `TOC-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
-function newOrderId() {
-  return `TOC-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-}
-
-function newTicketId() {
-  return `BUG-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-}
-
-function ticketFromRow(row) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    userId: row.user_id,
-    name: row.name,
-    email: row.email,
-    title: row.title,
-    category: row.category,
-    severity: row.severity,
-    pageUrl: row.page_url,
-    description: row.description,
-    steps: row.steps,
-    expected: row.expected,
-    actual: row.actual,
-    environment: row.environment ? JSON.parse(row.environment) : null,
-    status: row.status,
-    autofixId: row.autofix_id,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
-  };
-}
-
-module.exports = { open, get, tx, productFromRow, orderFromRow, ticketFromRow, newOrderId, newTicketId };
+module.exports = { connect, close, dropDatabase, col, nextSeq, productOut, orderOut, newOrderId };

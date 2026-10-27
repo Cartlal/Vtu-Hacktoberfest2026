@@ -1,9 +1,14 @@
+// "Report a problem" tickets. They live in the Lantern Desk helpdesk's collections
+// (same MongoDB database, same document shape as helpdesk/src/db.js), so a ticket raised
+// here is a helpdesk ticket at once: the helpdesk forwards it to AutoFix, and agent
+// replies and AutoFix progress show up here. This file maps between the helpdesk's
+// documents and the store's own ticket vocabulary, which the frontend uses.
 const express = require('express');
 const crypto = require('node:crypto');
 const multer = require('multer');
+const { Binary } = require('mongodb');
 const db = require('../db');
-const autofix = require('../autofix');
-const { HttpError } = require('../errors');
+const { HttpError, asyncRoute } = require('../errors');
 const { optionalAuth, requireAuth, requireAdmin } = require('../auth');
 
 const router = express.Router();
@@ -15,7 +20,21 @@ const MAX_FILES = 3;
 const MAX_FILE_BYTES = 3 * 1024 * 1024;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// --- Uploads: kept in memory, checked by content, then stored in SQLite ---
+// The helpdesk client this store is registered as, and its ticket id prefix.
+const clientSlug = () => process.env.HELPDESK_CLIENT_SLUG || 'trick-or-commit';
+const ticketPrefix = () => process.env.HELPDESK_TICKET_PREFIX || 'LD';
+
+// Store status <-> helpdesk status. "rejected" is a closed ticket with resolution "rejected".
+const TO_HELPDESK = { open: 'new', in_progress: 'open', resolved: 'solved', closed: 'closed', rejected: 'closed' };
+// Gemma's risk rating (from AutoFix, via the helpdesk) sets severity unless an admin chose one.
+const RISK_TO_SEVERITY = { LOW: 'low', MODERATE: 'medium', HIGH: 'high' };
+const SEVERITY_TO_PRIORITY = { low: 'low', medium: 'normal', high: 'high', critical: 'urgent' };
+// Helpdesk message kinds the reporter may see, and who they appear as here.
+const ROLE_BY_KIND = { customer: 'reporter', agent: 'admin', autofix: 'autofix' };
+
+const now = () => new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+// --- Uploads: kept in memory, checked by content, then stored in MongoDB ---
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { files: MAX_FILES, fileSize: MAX_FILE_BYTES, fields: 30, fieldSize: 20 * 1024 }
@@ -47,10 +66,10 @@ const recent = new Map();
 function rateLimit(req, res, next) {
   const limit = Number(process.env.TICKET_RATE_LIMIT) || 5;
   const windowMs = 10 * 60 * 1000;
-  const now = Date.now();
-  const hits = (recent.get(req.ip) || []).filter((t) => now - t < windowMs);
+  const time = Date.now();
+  const hits = (recent.get(req.ip) || []).filter((t) => time - t < windowMs);
   if (hits.length >= limit) return next(new HttpError(429, 'Too many reports from this device. Please try again in a few minutes.'));
-  hits.push(now);
+  hits.push(time);
   recent.set(req.ip, hits);
   next();
 }
@@ -74,31 +93,96 @@ function parseEnvironment(raw) {
   }
 }
 
-function loadTicket(id) {
-  return db.get().prepare('SELECT * FROM tickets WHERE id = ?').get(id);
+async function storeClient() {
+  return db.col('clients').findOne({ slug: clientSlug() });
+}
+
+async function loadTicket(id) {
+  const client = await storeClient();
+  if (!client) return null;
+  return db.col('tickets').findOne({ _id: String(id), client_id: client._id });
 }
 
 // Reporter (by access token or account), or any admin.
-function canView(req, row) {
-  if (!row) return false;
+function canView(req, doc) {
+  if (!doc) return false;
   const token = req.query.token || req.body?.token || req.get('X-Ticket-Token');
-  if (token && token === row.access_token) return true;
-  return !!req.user && (req.user.role === 'admin' || req.user.id === row.user_id);
+  if (token && token === doc.access_token) return true;
+  return !!req.user && (req.user.role === 'admin' || req.user.id === doc.store_user_id);
 }
 
-function ticketDetail(row, { includeToken = false } = {}) {
-  const ticket = db.ticketFromRow(row);
-  ticket.attachments = db.get()
-    .prepare('SELECT id, filename, mime, size FROM ticket_attachments WHERE ticket_id = ? ORDER BY id').all(row.id);
-  ticket.updates = db.get()
-    .prepare('SELECT id, author, author_role AS authorRole, status_from AS statusFrom, status_to AS statusTo, message, created_at AS createdAt FROM ticket_updates WHERE ticket_id = ? ORDER BY id')
-    .all(row.id);
-  if (includeToken) ticket.accessToken = row.access_token;
+function storeStatus(doc) {
+  switch (doc.status) {
+    case 'new': return 'open';
+    case 'solved': return 'resolved';
+    case 'closed': return doc.resolution === 'rejected' ? 'rejected' : 'closed';
+    default: return 'in_progress'; // open, pending, on_hold
+  }
+}
+
+function severityOf(doc) {
+  if (doc.severity) return doc.severity;
+  try {
+    const risk = JSON.parse(doc.autofix_json || 'null')?.risk;
+    return RISK_TO_SEVERITY[String(risk || '').toUpperCase()] || null;
+  } catch {
+    return null;
+  }
+}
+
+function ticketOut(doc) {
+  let environment = null;
+  try { environment = doc.environment ? JSON.parse(doc.environment) : null; } catch { /* plain text from the helpdesk */ }
+  return {
+    id: doc._id,
+    userId: doc.store_user_id ?? null,
+    name: doc.requester_name,
+    email: doc.requester_email,
+    title: doc.subject,
+    category: doc.category,
+    severity: severityOf(doc),
+    pageUrl: doc.page_url,
+    description: doc.description,
+    steps: doc.steps,
+    expected: doc.expected,
+    actual: doc.actual,
+    environment,
+    status: storeStatus(doc),
+    autofixId: doc.autofix_id,
+    createdAt: doc.created_at,
+    updatedAt: doc.updated_at
+  };
+}
+
+async function ticketDetail(doc) {
+  const ticket = ticketOut(doc);
+  const [files, messages] = await Promise.all([
+    db.col('attachments').find({ ticket_id: doc._id }, { projection: { data: 0 } }).sort({ _id: 1 }).toArray(),
+    db.col('messages').find({ ticket_id: doc._id, kind: { $in: Object.keys(ROLE_BY_KIND) } }).sort({ _id: 1 }).toArray()
+  ]);
+  ticket.attachments = files.map((a) => ({ id: a._id, filename: a.filename, mime: a.mime, size: a.size }));
+  ticket.updates = [
+    { id: 0, author: doc.requester_name || doc.requester_email, authorRole: 'reporter', statusFrom: null,
+      statusTo: 'open', message: 'Ticket raised', createdAt: doc.created_at },
+    ...messages.map((m) => ({
+      id: m._id, author: m.author, authorRole: ROLE_BY_KIND[m.kind],
+      statusFrom: m.status_from || null, statusTo: m.status_to || null,
+      message: m.status_only ? null : m.body, createdAt: m.created_at
+    }))
+  ];
   return ticket;
 }
 
+async function addMessage(ticketId, kind, author, body, extra = {}) {
+  const ts = now();
+  await db.col('messages').insertOne({
+    _id: await db.nextSeq('messages'), ticket_id: ticketId, kind, author, body, created_at: ts, ...extra
+  });
+  return ts;
+}
+
 // --- Raise a ticket (public; multipart form with up to 3 screenshots) ---
-router.post('/', optionalAuth, rateLimit, uploadScreenshots, (req, res) => {
+router.post('/', optionalAuth, rateLimit, uploadScreenshots, asyncRoute(async (req, res) => {
   const b = req.body;
   const t = {
     title: text(b.title, 120),
@@ -122,119 +206,158 @@ router.post('/', optionalAuth, rateLimit, uploadScreenshots, (req, res) => {
   const bad = files.find((f) => !f.sniffed);
   if (bad) throw new HttpError(400, `"${bad.originalname}" is not a PNG, JPEG, GIF or WebP image.`);
 
-  const id = db.newTicketId();
-  const accessToken = crypto.randomBytes(16).toString('hex');
-  db.tx(() => {
-    db.get().prepare(`
-      INSERT INTO tickets (id, access_token, user_id, name, email, title, category, page_url,
-                           description, steps, expected, actual, environment)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-      id, accessToken, req.user?.id ?? null, t.name, t.email, t.title, t.category, t.pageUrl,
-      t.description, t.steps, t.expected, t.actual, t.environment ? JSON.stringify(t.environment) : null
-    );
-    const insertFile = db.get().prepare('INSERT INTO ticket_attachments (ticket_id, filename, mime, size, data) VALUES (?, ?, ?, ?, ?)');
-    for (const f of files) {
-      const name = String(f.originalname || 'screenshot').replace(/[^\w.\- ]+/g, '_').slice(0, 100);
-      insertFile.run(id, name, f.sniffed, f.size, f.buffer);
-    }
-    db.get().prepare(`INSERT INTO ticket_updates (ticket_id, author, author_role, status_to, message)
-                      VALUES (?, ?, 'reporter', 'open', 'Ticket raised')`).run(id, t.name || t.email);
+  const client = await storeClient();
+  if (!client) throw new HttpError(503, 'Reporting is not available right now. Please try again later.');
+
+  const n = await db.nextSeq('tickets');
+  const id = `${ticketPrefix()}-${1000 + n}`;
+  const accessToken = crypto.randomBytes(18).toString('base64url');
+  const ts = now();
+  // Same fields as the helpdesk's createTicket(); store_user_id, severity and resolution
+  // are the store's own and the helpdesk ignores them.
+  await db.col('tickets').insertOne({
+    _id: id, n, client_id: client._id, channel: 'store', access_token: accessToken,
+    requester_name: t.name, requester_email: t.email, subject: t.title, description: t.description,
+    category: t.category, priority: 'normal', status: 'new', page_url: t.pageUrl, steps: t.steps,
+    expected: t.expected, actual: t.actual, environment: t.environment ? JSON.stringify(t.environment) : null,
+    external_ref: null, assignee_id: null, autofix_id: null, autofix_stage: null, autofix_json: null,
+    autofix_synced_at: null, created_at: ts, updated_at: ts, first_reply_at: null, solved_at: null,
+    store_user_id: req.user?.id ?? null, severity: null, resolution: null
   });
+  for (const f of files) {
+    await db.col('attachments').insertOne({
+      _id: await db.nextSeq('attachments'), ticket_id: id,
+      filename: String(f.originalname || 'screenshot').replace(/[^\w.\- ]+/g, '_').slice(0, 100),
+      mime: f.sniffed, size: f.size, data: new Binary(f.buffer), created_at: ts
+    });
+  }
+  await addMessage(id, 'system', 'Trick or Commit', 'Ticket raised on the store\'s "Report a problem" form.');
 
-  const row = loadTicket(id);
-  autofix.forwardTicket(db.ticketFromRow(row));
-  res.status(201).json({ id, accessToken, autofix: autofix.enabled() });
-});
+  // The helpdesk picks the ticket up on its next sync round and sends it to AutoFix.
+  res.status(201).json({ id, accessToken, autofix: !!client.autofix });
+}));
 
-router.get('/mine', requireAuth, (req, res) => {
-  const rows = db.get().prepare('SELECT * FROM tickets WHERE user_id = ? ORDER BY created_at DESC').all(req.user.id);
-  res.json(rows.map(db.ticketFromRow));
-});
+router.get('/mine', requireAuth, asyncRoute(async (req, res) => {
+  const client = await storeClient();
+  if (!client) return res.json([]);
+  const docs = await db.col('tickets').find({ client_id: client._id, store_user_id: req.user.id })
+    .sort({ created_at: -1 }).toArray();
+  res.json(docs.map(ticketOut));
+}));
 
 // --- Admin list ---
-router.get('/', requireAdmin, (req, res) => {
+const STATUS_ORDER = { open: 0, in_progress: 1 };
+const SEVERITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
+
+router.get('/', requireAdmin, asyncRoute(async (req, res) => {
   const { status, severity, q } = req.query;
-  const where = [];
-  const args = [];
-  if (STATUSES.includes(status)) { where.push('t.status = ?'); args.push(status); }
-  if (SEVERITIES.includes(severity)) { where.push('t.severity = ?'); args.push(severity); }
+  const client = await storeClient();
+  if (!client) return res.json([]);
+  const filter = { client_id: client._id };
   if (q) {
-    where.push('(t.title LIKE ? OR t.description LIKE ? OR t.id LIKE ? OR t.email LIKE ?)');
-    const like = `%${String(q).slice(0, 60)}%`;
-    args.push(like, like, like, like);
+    const like = new RegExp(String(q).slice(0, 60).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    filter.$or = [{ subject: like }, { description: like }, { _id: like }, { requester_email: like }];
   }
-  const rows = db.get().prepare(`
-    SELECT t.*, (SELECT COUNT(*) FROM ticket_attachments a WHERE a.ticket_id = t.id) AS attachment_count
-    FROM tickets t ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-    ORDER BY CASE t.status WHEN 'open' THEN 0 WHEN 'in_progress' THEN 1 ELSE 2 END,
-             CASE t.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
-             t.created_at DESC
-    LIMIT 500`).all(...args);
-  res.json(rows.map((r) => ({ ...db.ticketFromRow(r), attachmentCount: r.attachment_count })));
-});
+  const docs = await db.col('tickets').find(filter).sort({ created_at: -1 }).limit(500).toArray();
+  const counts = await db.col('attachments').aggregate([
+    { $match: { ticket_id: { $in: docs.map((d) => d._id) } } },
+    { $group: { _id: '$ticket_id', n: { $sum: 1 } } }
+  ]).toArray();
+  const byTicket = Object.fromEntries(counts.map((c) => [c._id, c.n]));
 
-router.get('/:id', optionalAuth, (req, res) => {
-  const row = loadTicket(req.params.id);
-  if (!canView(req, row)) throw new HttpError(404, 'Ticket not found.');
-  res.json(ticketDetail(row));
-});
+  const tickets = docs.map((d) => ({ ...ticketOut(d), attachmentCount: byTicket[d._id] || 0 }))
+    .filter((t) => (!STATUSES.includes(status) || t.status === status)
+      && (!SEVERITIES.includes(severity) || t.severity === severity));
+  // Stable sort keeps newest first within each group.
+  tickets.sort((a, b) => (STATUS_ORDER[a.status] ?? 2) - (STATUS_ORDER[b.status] ?? 2)
+    || (SEVERITY_ORDER[a.severity] ?? 4) - (SEVERITY_ORDER[b.severity] ?? 4));
+  res.json(tickets);
+}));
 
-router.get('/:id/attachments/:aid', optionalAuth, (req, res) => {
-  const row = loadTicket(req.params.id);
-  if (!canView(req, row)) throw new HttpError(404, 'Not found.');
-  const file = db.get().prepare('SELECT * FROM ticket_attachments WHERE id = ? AND ticket_id = ?')
-    .get(Number(req.params.aid), row.id);
+router.get('/:id', optionalAuth, asyncRoute(async (req, res) => {
+  const doc = await loadTicket(req.params.id);
+  if (!canView(req, doc)) throw new HttpError(404, 'Ticket not found.');
+  res.json(await ticketDetail(doc));
+}));
+
+router.get('/:id/attachments/:aid', optionalAuth, asyncRoute(async (req, res) => {
+  const doc = await loadTicket(req.params.id);
+  if (!canView(req, doc)) throw new HttpError(404, 'Not found.');
+  const file = await db.col('attachments').findOne({ _id: Number(req.params.aid), ticket_id: doc._id });
   if (!file) throw new HttpError(404, 'Not found.');
+  const data = Buffer.from(file.data.buffer);
   res.set({
     'Content-Type': file.mime,
-    'Content-Length': file.size,
+    'Content-Length': data.length,
     'Content-Disposition': `inline; filename="${file.filename.replace(/"/g, '')}"`,
     'X-Content-Type-Options': 'nosniff',
     'Cache-Control': 'private, max-age=3600'
   });
-  res.end(Buffer.from(file.data));
-});
+  res.end(data);
+}));
 
-// Reporter or admin adds a comment.
-router.post('/:id/comments', optionalAuth, (req, res) => {
-  const row = loadTicket(req.params.id);
-  if (!canView(req, row)) throw new HttpError(404, 'Ticket not found.');
+// Reporter or admin adds a comment. They show in the helpdesk as a customer or agent reply.
+router.post('/:id/comments', optionalAuth, asyncRoute(async (req, res) => {
+  const doc = await loadTicket(req.params.id);
+  if (!canView(req, doc)) throw new HttpError(404, 'Ticket not found.');
   const message = text(req.body.message, 2000);
   if (!message) throw new HttpError(400, 'Write a message first.');
   const isAdmin = req.user?.role === 'admin';
-  if (!isAdmin && ['closed', 'rejected'].includes(row.status)) throw new HttpError(400, 'This ticket is closed.');
-  db.tx(() => {
-    db.get().prepare('INSERT INTO ticket_updates (ticket_id, author, author_role, message) VALUES (?, ?, ?, ?)')
-      .run(row.id, isAdmin ? 'Store team' : (row.name || row.email), isAdmin ? 'admin' : 'reporter', message);
-    db.get().prepare("UPDATE tickets SET updated_at = datetime('now') WHERE id = ?").run(row.id);
-  });
-  res.status(201).json(ticketDetail(loadTicket(row.id)));
-});
+  if (!isAdmin && ['closed', 'rejected'].includes(storeStatus(doc))) throw new HttpError(400, 'This ticket is closed.');
+
+  const ts = await addMessage(doc._id, isAdmin ? 'agent' : 'customer',
+    isAdmin ? 'Store team' : (doc.requester_name || doc.requester_email), message);
+  const set = { updated_at: ts };
+  if (isAdmin) {
+    if (!doc.first_reply_at) set.first_reply_at = ts;
+  } else {
+    // Like a reply on the helpdesk's own tracking page: the ticket needs attention again,
+    // and answers to AutoFix's questions are sent back for a fresh triage.
+    if (['pending', 'solved'].includes(doc.status)) Object.assign(set, { status: 'open', solved_at: null });
+    if (doc.autofix_stage === 'NEEDS_INFO') set.retriage_requested = true;
+  }
+  await db.col('tickets').updateOne({ _id: doc._id }, { $set: set });
+  res.status(201).json(await ticketDetail(await loadTicket(doc._id)));
+}));
 
 // Admin triage: change status and/or severity, with an optional note to the reporter.
-router.patch('/:id', requireAdmin, (req, res) => {
-  const row = loadTicket(req.params.id);
-  if (!row) throw new HttpError(404, 'Ticket not found.');
-  const status = req.body.status ?? row.status;
-  const severity = req.body.severity === undefined ? row.severity : (req.body.severity || null);
+router.patch('/:id', requireAdmin, asyncRoute(async (req, res) => {
+  const doc = await loadTicket(req.params.id);
+  if (!doc) throw new HttpError(404, 'Ticket not found.');
+  const current = ticketOut(doc);
+  const status = req.body.status ?? current.status;
+  const severity = req.body.severity === undefined ? current.severity : (req.body.severity || null);
   const note = text(req.body.message, 2000);
   if (!STATUSES.includes(status)) throw new HttpError(400, 'Invalid status.');
   if (severity !== null && !SEVERITIES.includes(severity)) throw new HttpError(400, 'Invalid severity.');
-  const statusChanged = status !== row.status;
-  const severityChanged = severity !== row.severity;
+  const statusChanged = status !== current.status;
+  const severityChanged = severity !== current.severity;
   if (statusChanged && status === 'rejected' && !note) throw new HttpError(400, 'Tell the reporter why the ticket is rejected.');
   if (!statusChanged && !severityChanged && !note) throw new HttpError(400, 'Nothing to update.');
 
-  const message = [severityChanged && (severity ? `Severity set to ${severity}.` : 'Severity cleared.'), note]
-    .filter(Boolean).join(' ') || null;
-  db.tx(() => {
-    db.get().prepare("UPDATE tickets SET status = ?, severity = ?, updated_at = datetime('now') WHERE id = ?")
-      .run(status, severity, row.id);
-    db.get().prepare(`INSERT INTO ticket_updates (ticket_id, author, author_role, status_from, status_to, message)
-                      VALUES (?, 'Store team', 'admin', ?, ?, ?)`)
-      .run(row.id, statusChanged ? row.status : null, statusChanged ? status : null, message);
-  });
-  res.json(ticketDetail(loadTicket(row.id)));
-});
+  const set = {};
+  if (statusChanged) {
+    const hd = TO_HELPDESK[status];
+    Object.assign(set, { status: hd, resolution: status === 'rejected' ? 'rejected' : null,
+                         solved_at: ['solved', 'closed'].includes(hd) ? (doc.solved_at || now()) : null });
+  }
+  if (severityChanged) Object.assign(set, { severity, priority: severity ? SEVERITY_TO_PRIORITY[severity] : 'normal' });
 
-module.exports = { router, STATUSES };
+  const lines = [severityChanged && (severity ? `Severity set to ${severity}.` : 'Severity cleared.'), note].filter(Boolean);
+  const body = lines.join(' ') || `Status changed to ${status.replace('_', ' ')}.`;
+  set.updated_at = await addMessage(doc._id, 'agent', 'Store team', body, {
+    ...(statusChanged ? { status_from: current.status, status_to: status } : {}),
+    ...(lines.length ? {} : { status_only: true })
+  });
+  await db.col('tickets').updateOne({ _id: doc._id }, { $set: set });
+  res.json(await ticketDetail(await loadTicket(doc._id)));
+}));
+
+// Open or in progress, for the admin dashboard.
+async function countOpen() {
+  const client = await storeClient();
+  if (!client) return 0;
+  return db.col('tickets').countDocuments({ client_id: client._id, status: { $in: ['new', 'open', 'pending', 'on_hold'] } });
+}
+
+module.exports = { router, STATUSES, countOpen };

@@ -7,10 +7,17 @@ if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
   process.exit(1);
 }
 
-db.open();
-const app = require('./app');
-const port = Number(process.env.PORT) || 4000;
-
-app.listen(port, () => {
-  console.log(`Trick or Commit API on http://localhost:${port} (payments: ${payments.mode()})`);
-});
+(async () => {
+  try {
+    await db.connect();
+  } catch (err) {
+    console.error(`Could not connect to MongoDB: ${err.message}`);
+    console.error('Check MONGODB_URI, the password, and that Atlas Network Access allows this IP.');
+    process.exit(1);
+  }
+  const app = require('./app');
+  const port = Number(process.env.PORT) || 4000;
+  app.listen(port, () => {
+    console.log(`Trick or Commit API on http://localhost:${port} (payments: ${payments.mode()})`);
+  });
+})();
