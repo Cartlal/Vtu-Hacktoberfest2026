@@ -1,0 +1,64 @@
+# Trick or Commit 🎃
+
+Halloween costumes and **Hacktoberfest 2026** tees for the **VTU on-campus event**, powered by **GDG on Campus VTU**.
+A complete demo e-commerce site: marketing landing page, shop, cart, checkout with a payment gateway, customer
+accounts and an admin dashboard. React frontend, Node/Express backend, one Render service.
+
+> Unofficial demo store built for Hackfest 2026. Not affiliated with DigitalOcean (Hacktoberfest) or Google
+> (GDG on Campus). Payments run in test mode; no real money is charged.
+
+## Features
+- **Marketing site**: hero with countdown to Halloween hack night, live stats from the database (orders, tees sold,
+  subscribers), featured products, event schedule, FAQ, newsletter signup.
+- **Shop**: categories, search, size and price filters, sorting, product pages with sizes, stock levels and related items.
+- **Cart and checkout**: persistent cart, server-side pricing, coupon codes, free shipping over ₹999, free campus
+  pickup, Indian phone/PIN validation, guest or signed-in checkout.
+- **Payments**: Razorpay (UPI, cards, net banking, wallets) in test mode, with signature verification. With no keys
+  set, a built-in demo gateway is used so checkout always works. Live keys are refused unless `ALLOW_LIVE_PAYMENTS=true`.
+- **Orders**: stock is decremented atomically when payment is confirmed; confirmation page; order history.
+- **Accounts**: register, sign in (JWT, bcrypt).
+- **Admin dashboard** (`/admin`): revenue, orders, items sold, low-stock alerts, 14-day revenue chart, order status
+  management (cancelling restocks), product price/stock/visibility editing, add products.
+
+Coupons: `HACKTOBER26` (15% off ₹999+), `GDGVTU` (₹100 off ₹599+), `SPOOKY10` (10% off).
+
+## Stack
+| Part | Tech |
+|---|---|
+| Frontend | React 19, Vite, React Router, lucide-react |
+| Backend | Node 22.13+ / Express, `node:sqlite`, JWT, bcryptjs |
+| Payments | Razorpay Orders API + Checkout.js (test mode) |
+| Hosting | Render web service (`render.yaml`), GitHub Actions CI |
+
+## Run locally
+```bash
+npm run setup                     # install backend + frontend
+cp backend/.env.example backend/.env
+npm run dev:api                   # API on http://localhost:4000
+npm run dev:web                   # site on http://localhost:5173 (proxies /api)
+```
+Admin login: the `ADMIN_EMAIL` / `ADMIN_PASSWORD` from `backend/.env` (created on first start).
+
+Production-style run (Express serves the built site): `npm run build && npm start`, then open http://localhost:4000.
+
+Tests: `npm test` (API: catalogue, auth, pricing, checkout, stock, admin, payments). Lint: `npm run lint`.
+
+## Deploy on Render
+1. Push this repo to GitHub.
+2. Render → **New → Blueprint** → select the repo. `render.yaml` creates one free web service.
+3. In the service's **Environment**, set `ADMIN_EMAIL`, `ADMIN_PASSWORD`, and optionally `RAZORPAY_KEY_ID` /
+   `RAZORPAY_KEY_SECRET` (test keys from dashboard.razorpay.com in Test mode). `JWT_SECRET` is generated for you.
+4. Every push to the default branch redeploys automatically. Health check: `/api/health`.
+
+**Data on the free plan:** the database is a SQLite file on the service's disk, which Render resets on every deploy
+or restart. Products re-seed automatically; orders, accounts and subscribers start fresh. For data that survives,
+attach a Render persistent disk (paid) and set `DB_FILE` to a path on it.
+
+## Project layout
+```
+backend/   Express API: src/routes/*, pricing.js, payments.js, db.js (schema + seed.js), test/
+frontend/  React app: src/pages/*, src/components/*, src/context/* (cart, auth), src/content/event.js
+render.yaml, .github/workflows/ci.yml
+```
+Event details (dates, venue, schedule, FAQ) live in `frontend/src/content/event.js`; the catalogue seed is in
+`backend/src/seed.js`.
