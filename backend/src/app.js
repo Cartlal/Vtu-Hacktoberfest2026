@@ -15,6 +15,8 @@ app.use('/api/checkout', require('./routes/checkout'));
 app.use('/api/orders', require('./routes/orders'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/marketing', require('./routes/marketing'));
+app.use('/api/tickets', require('./routes/tickets').router);
+app.use('/api/autofix', require('./routes/autofix'));
 app.use('/api', (req, res, next) => next(new HttpError(404, 'Not found.')));
 
 // In production the same service serves the built React app.

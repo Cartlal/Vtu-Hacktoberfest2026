@@ -27,6 +27,7 @@ router.get('/stats', (req, res) => {
     pendingOrders: d.prepare("SELECT COUNT(*) AS n FROM orders WHERE status = 'pending_payment'").get().n,
     customers: d.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'customer'").get().n,
     subscribers: d.prepare('SELECT COUNT(*) AS n FROM subscribers').get().n,
+    openTickets: d.prepare("SELECT COUNT(*) AS n FROM tickets WHERE status IN ('open', 'in_progress')").get().n,
     lowStock: d.prepare('SELECT * FROM products WHERE active = 1 AND stock <= 10 ORDER BY stock').all().map(db.productFromRow),
     byDay
   });

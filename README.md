@@ -19,6 +19,13 @@ accounts and an admin dashboard. React frontend, Node/Express backend, one Rende
 - **Accounts**: register, sign in (JWT, bcrypt).
 - **Admin dashboard** (`/admin`): revenue, orders, items sold, low-stock alerts, 14-day revenue chart, order status
   management (cancelling restocks), product price/stock/visibility editing, add products.
+- **Report a problem** (`/report`): a floating "Report a bug" button on every page opens a full ticket form: problem
+  type, severity, page (auto-filled), what happened, steps to reproduce, expected vs actual, up to 3 screenshots
+  (click, drag and drop, or paste with Ctrl+V; PNG/JPEG/GIF/WebP, 3 MB each, checked by file content), contact
+  details and optional browser info. Reporters get a private tracking page (`/ticket/:id`) with status, timeline and
+  comments; signed-in users see "Your reports" on their account. Admins triage in the **Tickets** tab.
+- **AutoFix hook**: with `AUTOFIX_URL` and `AUTOFIX_SECRET` set, new tickets are forwarded to AutoFix (Gemma triage +
+  Claude auto-fix), which posts progress back to `POST /api/autofix/bugs/:id/update` onto the ticket's timeline.
 
 Coupons: `HACKTOBER26` (15% off ₹999+), `GDGVTU` (₹100 off ₹599+), `SPOOKY10` (10% off).
 
@@ -41,7 +48,8 @@ Admin login: the `ADMIN_EMAIL` / `ADMIN_PASSWORD` from `backend/.env` (created o
 
 Production-style run (Express serves the built site): `npm run build && npm start`, then open http://localhost:4000.
 
-Tests: `npm test` (API: catalogue, auth, pricing, checkout, stock, admin, payments). Lint: `npm run lint`.
+Tests: `npm test` (API: catalogue, auth, pricing, checkout, stock, admin, payments, tickets and uploads, AutoFix
+forward and callback). Lint: `npm run lint`.
 
 ## Deploy on Render
 1. Push this repo to GitHub.

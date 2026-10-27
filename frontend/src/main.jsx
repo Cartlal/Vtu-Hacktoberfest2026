@@ -13,6 +13,8 @@ import Order from './pages/Order';
 import Login from './pages/Login';
 import Account from './pages/Account';
 import Admin from './pages/Admin';
+import Report from './pages/Report';
+import Ticket from './pages/Ticket';
 import './styles.css';
 
 function ScrollToTop() {
@@ -51,6 +53,8 @@ createRoot(document.getElementById('root')).render(
               <Route path="login" element={<Login />} />
               <Route path="account" element={<Account />} />
               <Route path="admin" element={<Admin />} />
+              <Route path="report" element={<Report />} />
+              <Route path="ticket/:id" element={<Ticket />} />
               <Route path="*" element={<NotFound />} />
             </Route>
           </Routes>

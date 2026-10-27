@@ -67,6 +67,52 @@ CREATE TABLE IF NOT EXISTS subscribers (
   email      TEXT PRIMARY KEY,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- "Report a problem" tickets. AutoFix triages these and posts progress back.
+CREATE TABLE IF NOT EXISTS tickets (
+  id           TEXT PRIMARY KEY,
+  access_token TEXT NOT NULL,
+  user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  name         TEXT,
+  email        TEXT NOT NULL,
+  title        TEXT NOT NULL,
+  category     TEXT NOT NULL,
+  severity     TEXT NOT NULL CHECK (severity IN ('low', 'medium', 'high', 'critical')),
+  page_url     TEXT,
+  description  TEXT NOT NULL,
+  steps        TEXT,
+  expected     TEXT,
+  actual       TEXT,
+  environment  TEXT,
+  status       TEXT NOT NULL DEFAULT 'open'
+               CHECK (status IN ('open', 'in_progress', 'resolved', 'closed', 'rejected')),
+  autofix_id   TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets (status, created_at);
+
+-- Screenshots live in the database (not on disk) so they survive with their ticket.
+CREATE TABLE IF NOT EXISTS ticket_attachments (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  filename  TEXT NOT NULL,
+  mime      TEXT NOT NULL,
+  size      INTEGER NOT NULL,
+  data      BLOB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ticket_updates (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  ticket_id   TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  author      TEXT NOT NULL,
+  author_role TEXT NOT NULL CHECK (author_role IN ('reporter', 'admin', 'autofix')),
+  status_from TEXT,
+  status_to   TEXT,
+  message     TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ticket_updates ON ticket_updates (ticket_id, id);
 `;
 
 let db = null;
@@ -178,4 +224,31 @@ function newOrderId() {
   return `TOC-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 }
 
-module.exports = { open, get, tx, productFromRow, orderFromRow, newOrderId };
+function newTicketId() {
+  return `BUG-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+}
+
+function ticketFromRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    userId: row.user_id,
+    name: row.name,
+    email: row.email,
+    title: row.title,
+    category: row.category,
+    severity: row.severity,
+    pageUrl: row.page_url,
+    description: row.description,
+    steps: row.steps,
+    expected: row.expected,
+    actual: row.actual,
+    environment: row.environment ? JSON.parse(row.environment) : null,
+    status: row.status,
+    autofixId: row.autofix_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+module.exports = { open, get, tx, productFromRow, orderFromRow, ticketFromRow, newOrderId, newTicketId };

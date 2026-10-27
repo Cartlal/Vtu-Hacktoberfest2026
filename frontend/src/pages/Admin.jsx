@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
+import { Paperclip } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { inr, formatDate, STATUS_LABELS } from '../format';
 import ProductArt, { ICON_NAMES } from '../components/ProductArt';
+import { TicketView } from './Ticket';
+import { SEVERITY_BADGE, TICKET_STATUS, categoryLabel } from '../content/tickets';
 
 function Overview() {
   const [stats, setStats] = useState(null);
@@ -24,6 +27,7 @@ function Overview() {
         <div className="card"><span className="muted">Customers</span><strong>{stats.customers}</strong></div>
         <div className="card"><span className="muted">Subscribers</span><strong>{stats.subscribers}</strong></div>
         <div className="card"><span className="muted">Low-stock products</span><strong>{stats.lowStock.length}</strong></div>
+        <div className="card"><span className="muted">Open tickets</span><strong>{stats.openTickets}</strong></div>
       </div>
       <div className="two-col">
         <div className="card">
@@ -218,6 +222,73 @@ function Products() {
   );
 }
 
+function Tickets() {
+  const [tickets, setTickets] = useState(null);
+  const [filter, setFilter] = useState({ status: '', severity: '' });
+  const [selected, setSelected] = useState(null);
+  const [error, setError] = useState('');
+  const query = new URLSearchParams(Object.entries(filter).filter(([, v]) => v)).toString();
+
+  useEffect(() => {
+    let cancelled = false;
+    api(`/tickets${query ? `?${query}` : ''}`)
+      .then((t) => !cancelled && setTickets(t))
+      .catch((e) => !cancelled && setError(e.message));
+    return () => { cancelled = true; };
+  }, [query]);
+
+  const setF = (key) => (e) => { setFilter((f) => ({ ...f, [key]: e.target.value })); setTickets(null); };
+
+  if (selected) {
+    return (
+      <div className="stack">
+        <button className="btn ghost small" style={{ justifySelf: 'start' }} onClick={() => setSelected(null)}>← All tickets</button>
+        <TicketView id={selected} admin onChange={(t) => setTickets((list) => list?.map((x) => (x.id === t.id ? { ...x, status: t.status } : x)))} />
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="row" style={{ marginBottom: 12 }}>
+        <label htmlFor="t-status" className="muted">Status</label>
+        <select id="t-status" className="input" style={{ width: 'auto' }} value={filter.status} onChange={setF('status')}>
+          <option value="">All</option>
+          {Object.entries(TICKET_STATUS).map(([v, s]) => <option key={v} value={v}>{s.label}</option>)}
+        </select>
+        <label htmlFor="t-sev" className="muted">Severity</label>
+        <select id="t-sev" className="input" style={{ width: 'auto' }} value={filter.severity} onChange={setF('severity')}>
+          <option value="">All</option>
+          {['critical', 'high', 'medium', 'low'].map((s) => <option key={s} value={s}>{s[0].toUpperCase() + s.slice(1)}</option>)}
+        </select>
+      </div>
+      {error && <p className="error">{error}</p>}
+      {tickets === null ? <div className="loader">Loading tickets…</div> : tickets.length === 0 ? <p className="muted">No tickets.</p> : (
+        <div className="card table-wrap">
+          <table>
+            <thead><tr><th>Ticket</th><th>Title</th><th>Type</th><th>Severity</th><th>Status</th><th>Reporter</th><th>Raised</th></tr></thead>
+            <tbody>
+              {tickets.map((t) => (
+                <tr key={t.id} className="clickable" onClick={() => setSelected(t.id)}>
+                  <td><button className="btn ghost small accent" onClick={() => setSelected(t.id)}>{t.id}</button></td>
+                  <td>{t.title}{t.attachmentCount > 0 && (
+                    <span className="muted" aria-label={`${t.attachmentCount} screenshots`}> · <Paperclip size={13} style={{ verticalAlign: '-2px' }} />{t.attachmentCount}</span>
+                  )}</td>
+                  <td>{categoryLabel(t.category)}</td>
+                  <td><span className={`badge ${SEVERITY_BADGE[t.severity]}`}>{t.severity}</span></td>
+                  <td><span className={`badge ${TICKET_STATUS[t.status].badge}`}>{TICKET_STATUS[t.status].label}</span></td>
+                  <td>{t.name || '—'}<br /><span className="muted">{t.email}</span></td>
+                  <td>{formatDate(t.createdAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function Admin() {
   const { user, loading } = useAuth();
   const [tab, setTab] = useState('overview');
@@ -229,12 +300,13 @@ export default function Admin() {
     <div className="container page">
       <h1>Store dashboard</h1>
       <div className="tabs" role="tablist">
-        {[['overview', 'Overview'], ['orders', 'Orders'], ['products', 'Products']].map(([id, label]) => (
+        {[['overview', 'Overview'], ['orders', 'Orders'], ['tickets', 'Tickets'], ['products', 'Products']].map(([id, label]) => (
           <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>
         ))}
       </div>
       {tab === 'overview' && <Overview />}
       {tab === 'orders' && <Orders />}
+      {tab === 'tickets' && <Tickets />}
       {tab === 'products' && <Products />}
     </div>
   );

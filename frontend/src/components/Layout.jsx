@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Link, NavLink, Outlet } from 'react-router-dom';
-import { Menu, ShoppingBag, User, X } from 'lucide-react';
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
+import { Bug, Menu, ShoppingBag, User, X } from 'lucide-react';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { EVENT } from '../content/event';
@@ -61,6 +61,7 @@ function Footer() {
             <h4>Help</h4>
             <a href="/#faq">FAQ</a>
             <Link to="/account">Your orders</Link>
+            <Link to="/report">Report a problem</Link>
             <a href="/#event">Event schedule</a>
           </div>
         </div>
@@ -73,12 +74,24 @@ function Footer() {
   );
 }
 
+// Floating "Report a bug" button on every page; it tells the form where you were.
+function ReportButton() {
+  const location = useLocation();
+  if (location.pathname === '/report' || location.pathname.startsWith('/ticket/')) return null;
+  return (
+    <Link to="/report" state={{ from: location.pathname + location.search }} className="report-fab" aria-label="Report a problem with this page">
+      <Bug size={18} aria-hidden="true" /> <span>Report a bug</span>
+    </Link>
+  );
+}
+
 export default function Layout() {
   return (
     <>
       <Header />
       <main><Outlet /></main>
       <Footer />
+      <ReportButton />
     </>
   );
 }
