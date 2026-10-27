@@ -186,7 +186,12 @@ p { line-height: 1.6; margin: 0 0 1em; color: var(--muted); }
 .qty button { background: transparent; border: 0; padding: 8px 12px; cursor: pointer; }
 .qty button:hover { background: var(--surface-2); }
 .qty span { min-width: 28px; text-align: center; font-weight: 600; }
-@media (max-width: 820px) { .pdp { grid-template-columns: 1fr; } }
+@media (max-width: 820px) { .pdp { grid-template-columns: minmax(0, 1fr); } }
+.pdp > * { min-width: 0; }
+@media (max-width: 400px) {
+  .pdp { gap: 20px; }
+  .pdp .row > .btn { flex: 1 1 100%; min-width: 0; white-space: normal; }
+}
 
 /* --- Cart & checkout --- */
 .two-col { display: grid; grid-template-columns: 1.6fr 1fr; gap: 28px; align-items: start; }
