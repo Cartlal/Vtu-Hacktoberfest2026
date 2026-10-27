@@ -67,8 +67,8 @@ export default function Cart() {
     return (
       <div className="container page empty">
         <Ghost size={56} aria-hidden="true" />
-        <h1>Your cart is a ghost town 👻 Go grab some merch!</h1>
-        <p>Nothing in here yet. Go find something spooky.</p>
+        <h1>NULL</h1>
+        <p>vtu cart down</p>
         <Link to="/shop" className="btn">Start shopping</Link>
       </div>
     );
