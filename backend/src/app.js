@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const express = require('express');
 const { HttpError } = require('./errors');
-
+//
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1); // behind Render's proxy
