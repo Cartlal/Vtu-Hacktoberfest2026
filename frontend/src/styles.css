@@ -244,17 +244,6 @@ td .input { padding: 6px 8px; }
 @media (max-width: 760px) { .category-grid { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 480px) { .category-grid { grid-template-columns: 1fr; } }
 
-.severity-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-.severity-opt { position: relative; display: grid; gap: 2px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; cursor: pointer; }
-.severity-opt input { position: absolute; opacity: 0; pointer-events: none; }
-.severity-opt span { font-size: 0.8rem; color: var(--muted); }
-.severity-opt:focus-within { box-shadow: 0 0 0 3px rgba(155, 109, 255, 0.3); }
-.severity-opt.active.sev-low { border-color: var(--green); background: rgba(94, 229, 154, 0.08); }
-.severity-opt.active.sev-medium { border-color: var(--purple); background: rgba(155, 109, 255, 0.1); }
-.severity-opt.active.sev-high { border-color: var(--orange); background: rgba(255, 122, 26, 0.1); }
-.severity-opt.active.sev-critical { border-color: var(--red); background: rgba(255, 93, 115, 0.1); }
-@media (max-width: 640px) { .severity-row { grid-template-columns: 1fr 1fr; } }
-
 .dropzone {
   display: grid; justify-items: center; gap: 6px; padding: 28px 16px; text-align: center; cursor: pointer;
   border: 2px dashed var(--border); border-radius: 14px; background: var(--bg); transition: border-color 0.15s, background 0.15s;

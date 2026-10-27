@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { CreditCard, Lock, Store, Truck } from 'lucide-react';
 import { api } from '../api';
@@ -22,15 +22,29 @@ function validate(form) {
   return errors;
 }
 
-function loadRazorpay() {
-  if (window.Razorpay) return Promise.resolve(true);
+// Loads a gateway's checkout script once; resolves true when `globalName` exists.
+function loadScript(src, globalName) {
+  if (window[globalName]) return Promise.resolve(true);
   return new Promise((resolve) => {
     const script = document.createElement('script');
-    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
-    script.onload = () => resolve(true);
+    script.src = src;
+    script.onload = () => resolve(!!window[globalName]);
     script.onerror = () => resolve(false);
     document.body.appendChild(script);
   });
+}
+
+const GATEWAY_LABEL = { smepay: 'SMEPay (UPI)', razorpay: 'Razorpay', demo: 'demo gateway' };
+
+// Lets guests reopen their order page later (e.g. after SMEPay's redirect).
+function rememberOrder(id, token) {
+  try {
+    const saved = JSON.parse(localStorage.getItem('toc_orders') || '{}');
+    saved[id] = token;
+    localStorage.setItem('toc_orders', JSON.stringify(saved));
+  } catch {
+    // storage blocked: the confirmation link still carries the token
+  }
 }
 
 // Stand-in for a real gateway when no Razorpay keys are configured.
@@ -42,7 +56,7 @@ function DemoGateway({ amount, onPay, onCancel, busy }) {
           <h3 id="demo-pay-title" style={{ margin: 0 }}>Demo payment</h3>
           <span className="badge purple">Test mode</span>
         </div>
-        <p style={{ margin: 0 }}>No real money moves. Add Razorpay test keys on the server to use the real Razorpay checkout.</p>
+        <p style={{ margin: 0 }}>No real money moves. Add SMEPay (or Razorpay) test keys on the server to use the real payment window.</p>
         <div className="field"><label htmlFor="demo-card">Card number</label><input id="demo-card" className="input" value="4111 1111 1111 1111" readOnly /></div>
         <div className="form-grid">
           <div className="field"><label htmlFor="demo-exp">Expiry</label><input id="demo-exp" className="input" value="12/30" readOnly /></div>
@@ -75,6 +89,11 @@ function CheckoutForm({ user }) {
   const [demo, setDemo] = useState(null);
   const [coupon] = useState(savedCoupon);
   const { quote, error: quoteError } = useQuote(apiItems, coupon, form.delivery);
+  const [gateway, setGateway] = useState(null);
+
+  useEffect(() => {
+    api('/checkout/payment-config').then(setGateway).catch(() => {});
+  }, []);
 
   if (items.length === 0 && !demo) return <Navigate to="/cart" replace />;
 
@@ -108,13 +127,30 @@ function CheckoutForm({ user }) {
         }
       });
 
+      rememberOrder(order.orderId, order.accessToken);
+
       if (order.payment.provider === 'demo') {
         setDemo(order);
         setBusy(false);
         return;
       }
 
-      if (!(await loadRazorpay())) throw new Error('Could not load Razorpay. Check your connection and try again.');
+      if (order.payment.provider === 'smepay') {
+        if (!(await loadScript('https://typof.co/smepay/checkout-v2.js', 'smepayCheckout'))) {
+          throw new Error('Could not load the SMEPay payment window. Check your connection and try again.');
+        }
+        window.smepayCheckout({
+          slug: order.payment.slug,
+          // The server double-checks with SMEPay before marking the order paid.
+          onSuccess: () => confirmPayment(order, {}).catch((err) => { setSubmitError(err.message); setBusy(false); }),
+          onFailure: () => { setBusy(false); setSubmitError('Payment was cancelled or failed. Your cart is still here.'); }
+        });
+        return;
+      }
+
+      if (!(await loadScript('https://checkout.razorpay.com/v1/checkout.js', 'Razorpay'))) {
+        throw new Error('Could not load Razorpay. Check your connection and try again.');
+      }
       const rzp = new window.Razorpay({
         key: order.payment.keyId,
         amount: order.payment.amount,
@@ -187,7 +223,11 @@ function CheckoutForm({ user }) {
                 </div>
               ))}
               <button className="btn block" disabled={busy}><CreditCard size={18} /> {busy ? 'Processing…' : `Pay ${inr(quote.total)}`}</button>
-              <span className="muted row" style={{ fontSize: '0.8rem', gap: 6 }}><Lock size={14} /> Secured by Razorpay · test mode</span>
+              {gateway && (
+                <span className="muted row" style={{ fontSize: '0.8rem', gap: 6 }}>
+                  <Lock size={14} /> Secured by {GATEWAY_LABEL[gateway.mode] || 'our payment partner'}{gateway.testMode && ' · test mode'}
+                </span>
+              )}
             </Summary>
           ) : <div className="card loader">{quoteError || 'Pricing your order…'}</div>}
           {submitError && <p className="error" role="alert">{submitError}</p>}

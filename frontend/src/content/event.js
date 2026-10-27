@@ -18,7 +18,7 @@ export const EVENT = {
     { q: 'Is this the official Hacktoberfest store?', a: 'No. This is an unofficial campus merch store for the VTU on-campus event, run with GDG on Campus VTU. Hacktoberfest itself is organised by DigitalOcean.' },
     { q: 'Can I pick up my order on campus?', a: 'Yes. Choose "Campus pickup" at checkout and collect it at the merch desk during any event day. Pickup is always free.' },
     { q: 'How much is shipping?', a: 'Free on orders of ₹999 or more after discounts, otherwise a flat ₹79 anywhere in India.' },
-    { q: 'Which payment methods work?', a: 'UPI, cards, net banking and wallets through Razorpay. This demo build runs payments in test mode, so no real money is charged.' },
+    { q: 'How do I pay?', a: 'Scan the UPI QR in the SMEPay payment window with any UPI app (GPay, PhonePe, Paytm, BHIM). This demo build runs payments in test mode, so no real money is charged.' },
     { q: 'What sizes do the tees come in?', a: 'XS to XXL in a unisex fit. Costumes come in S to XL. Each product page lists the sizes in stock.' }
   ]
 };

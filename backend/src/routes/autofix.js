@@ -9,6 +9,8 @@ const router = express.Router();
 
 // AutoFix speaks upper-case bug-report statuses; map them to ours.
 const STATUS_MAP = { OPEN: 'open', IN_PROGRESS: 'in_progress', RESOLVED: 'resolved', CLOSED: 'closed', REJECTED: 'rejected' };
+// Gemma's risk rating becomes the ticket's severity.
+const RISK_TO_SEVERITY = { LOW: 'low', MODERATE: 'medium', HIGH: 'high' };
 
 router.use((req, res, next) => {
   const secret = Buffer.from(process.env.AUTOFIX_SECRET || '');
@@ -27,11 +29,16 @@ router.post('/bugs/:id/update', (req, res) => {
   const status = req.body.status ? STATUS_MAP[req.body.status] : null;
   if (req.body.status && !status) throw new HttpError(400, 'Invalid status.');
 
-  // Never override a decision the store team already made.
+  const severity = req.body.risk ? RISK_TO_SEVERITY[String(req.body.risk).toUpperCase()] : null;
+  if (req.body.risk && !severity) throw new HttpError(400, 'Invalid risk.');
+
+  // Never override a decision the store team already made (a closed ticket,
+  // or a severity an admin set).
   const change = status && status !== row.status && !['closed', 'rejected'].includes(row.status);
   db.tx(() => {
     if (change) db.get().prepare("UPDATE tickets SET status = ?, updated_at = datetime('now') WHERE id = ?").run(status, row.id);
     else db.get().prepare("UPDATE tickets SET updated_at = datetime('now') WHERE id = ?").run(row.id);
+    if (severity && !row.severity) db.get().prepare('UPDATE tickets SET severity = ? WHERE id = ?').run(severity, row.id);
     if (req.body.ticket_id) db.get().prepare('UPDATE tickets SET autofix_id = ? WHERE id = ?').run(String(req.body.ticket_id).slice(0, 40), row.id);
     db.get().prepare(`INSERT INTO ticket_updates (ticket_id, author, author_role, status_from, status_to, message)
                       VALUES (?, 'AutoFix (AI)', 'autofix', ?, ?, ?)`)

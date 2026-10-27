@@ -4,7 +4,7 @@ import { Bot, MessageSquare, Paperclip, Send, ShieldCheck, User } from 'lucide-r
 import { api, apiBlobUrl } from '../api';
 import { formatDate } from '../format';
 import {
-  SEVERITY_BADGE, TICKET_STATUS, categoryLabel, savedTicketToken, severityLabel
+  SEVERITY_BADGE, TICKET_SEVERITIES, TICKET_STATUS, categoryLabel, savedTicketToken, severityLabel
 } from '../content/tickets';
 
 // Reporters load screenshots with their private token in the URL; signed-in
@@ -68,20 +68,23 @@ function Timeline({ updates }) {
 
 function AdminControls({ ticket, onSaved }) {
   const [status, setStatus] = useState(ticket.status);
+  const [severity, setSeverity] = useState(ticket.severity || '');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
   async function save(e) {
     e.preventDefault();
-    if (status === 'rejected' && !message.trim()) return setError('Tell the reporter why it is rejected.');
-    if (status === ticket.status && !message.trim()) return setError('Change the status or write a note.');
+    const statusChanged = status !== ticket.status;
+    const severityChanged = severity !== (ticket.severity || '');
+    if (statusChanged && status === 'rejected' && !message.trim()) return setError('Tell the reporter why it is rejected.');
+    if (!statusChanged && !severityChanged && !message.trim()) return setError('Change the status or severity, or write a note.');
     setBusy(true);
     setError('');
     try {
-      const updated = status === ticket.status
-        ? await api(`/tickets/${ticket.id}/comments`, { method: 'POST', body: { message } })
-        : await api(`/tickets/${ticket.id}`, { method: 'PATCH', body: { status, message } });
+      const updated = statusChanged || severityChanged
+        ? await api(`/tickets/${ticket.id}`, { method: 'PATCH', body: { status, severity: severity || null, message } })
+        : await api(`/tickets/${ticket.id}/comments`, { method: 'POST', body: { message } });
       setMessage('');
       onSaved(updated);
     } catch (err) {
@@ -99,6 +102,13 @@ function AdminControls({ ticket, onSaved }) {
           <label htmlFor={`status-${ticket.id}`}>Status</label>
           <select id={`status-${ticket.id}`} className="input" value={status} onChange={(e) => { setStatus(e.target.value); setError(''); }}>
             {Object.entries(TICKET_STATUS).map(([v, s]) => <option key={v} value={v}>{s.label}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor={`severity-${ticket.id}`}>Severity</label>
+          <select id={`severity-${ticket.id}`} className="input" value={severity} onChange={(e) => { setSeverity(e.target.value); setError(''); }}>
+            <option value="">Not set (awaiting triage)</option>
+            {TICKET_SEVERITIES.map((s) => <option key={s.id} value={s.id}>{s.label}: {s.hint}</option>)}
           </select>
         </div>
         <div className="field full">
@@ -164,7 +174,9 @@ export function TicketView({ id, token, admin = false, onChange }) {
           </div>
           <div className="row">
             <span className={`badge ${TICKET_STATUS[t.status].badge}`}>{TICKET_STATUS[t.status].label}</span>
-            <span className={`badge ${SEVERITY_BADGE[t.severity]}`}>{severityLabel(t.severity)} severity</span>
+            {t.severity
+              ? <span className={`badge ${SEVERITY_BADGE[t.severity]}`}>{severityLabel(t.severity)} severity</span>
+              : <span className="badge">Awaiting triage</span>}
           </div>
         </div>
         <dl className="ticket-facts">
@@ -194,7 +206,7 @@ export function TicketView({ id, token, admin = false, onChange }) {
         )}
       </div>
 
-      {admin && <AdminControls key={t.status} ticket={t} onSaved={updated} />}
+      {admin && <AdminControls key={`${t.status}:${t.severity}`} ticket={t} onSaved={updated} />}
 
       <div className="card stack">
         <h3 style={{ margin: 0 }}>Activity</h3>

@@ -243,7 +243,7 @@ function Tickets() {
     return (
       <div className="stack">
         <button className="btn ghost small" style={{ justifySelf: 'start' }} onClick={() => setSelected(null)}>← All tickets</button>
-        <TicketView id={selected} admin onChange={(t) => setTickets((list) => list?.map((x) => (x.id === t.id ? { ...x, status: t.status } : x)))} />
+        <TicketView id={selected} admin onChange={(t) => setTickets((list) => list?.map((x) => (x.id === t.id ? { ...x, status: t.status, severity: t.severity } : x)))} />
       </div>
     );
   }
@@ -275,7 +275,9 @@ function Tickets() {
                     <span className="muted" aria-label={`${t.attachmentCount} screenshots`}> · <Paperclip size={13} style={{ verticalAlign: '-2px' }} />{t.attachmentCount}</span>
                   )}</td>
                   <td>{categoryLabel(t.category)}</td>
-                  <td><span className={`badge ${SEVERITY_BADGE[t.severity]}`}>{t.severity}</span></td>
+                  <td>{t.severity
+                    ? <span className={`badge ${SEVERITY_BADGE[t.severity]}`}>{t.severity}</span>
+                    : <span className="muted">Untriaged</span>}</td>
                   <td><span className={`badge ${TICKET_STATUS[t.status].badge}`}>{TICKET_STATUS[t.status].label}</span></td>
                   <td>{t.name || '—'}<br /><span className="muted">{t.email}</span></td>
                   <td>{formatDate(t.createdAt)}</td>

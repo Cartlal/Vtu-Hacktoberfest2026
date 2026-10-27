@@ -103,7 +103,7 @@ router.post('/', optionalAuth, rateLimit, uploadScreenshots, (req, res) => {
   const t = {
     title: text(b.title, 120),
     category: b.category,
-    severity: b.severity || 'medium',
+    // No severity: triage (AutoFix or an admin) decides it, not the reporter.
     pageUrl: text(b.pageUrl, 300),
     description: text(b.description, 5000),
     steps: text(b.steps, 2000),
@@ -115,7 +115,6 @@ router.post('/', optionalAuth, rateLimit, uploadScreenshots, (req, res) => {
   };
   if (!t.title || t.title.length < 5) throw new HttpError(400, 'Give your report a short title (at least 5 characters).');
   if (!CATEGORIES.includes(t.category)) throw new HttpError(400, 'Choose what kind of problem this is.');
-  if (!SEVERITIES.includes(t.severity)) throw new HttpError(400, 'Choose how serious it is.');
   if (!t.description || t.description.length < 10) throw new HttpError(400, 'Describe what happened (at least 10 characters).');
   if (!EMAIL_RE.test(t.email)) throw new HttpError(400, 'Enter a valid email so we can update you.');
 
@@ -127,10 +126,10 @@ router.post('/', optionalAuth, rateLimit, uploadScreenshots, (req, res) => {
   const accessToken = crypto.randomBytes(16).toString('hex');
   db.tx(() => {
     db.get().prepare(`
-      INSERT INTO tickets (id, access_token, user_id, name, email, title, category, severity, page_url,
+      INSERT INTO tickets (id, access_token, user_id, name, email, title, category, page_url,
                            description, steps, expected, actual, environment)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-      id, accessToken, req.user?.id ?? null, t.name, t.email, t.title, t.category, t.severity, t.pageUrl,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      id, accessToken, req.user?.id ?? null, t.name, t.email, t.title, t.category, t.pageUrl,
       t.description, t.steps, t.expected, t.actual, t.environment ? JSON.stringify(t.environment) : null
     );
     const insertFile = db.get().prepare('INSERT INTO ticket_attachments (ticket_id, filename, mime, size, data) VALUES (?, ?, ?, ?, ?)');
@@ -168,7 +167,7 @@ router.get('/', requireAdmin, (req, res) => {
     SELECT t.*, (SELECT COUNT(*) FROM ticket_attachments a WHERE a.ticket_id = t.id) AS attachment_count
     FROM tickets t ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
     ORDER BY CASE t.status WHEN 'open' THEN 0 WHEN 'in_progress' THEN 1 ELSE 2 END,
-             CASE t.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+             CASE t.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
              t.created_at DESC
     LIMIT 500`).all(...args);
   res.json(rows.map((r) => ({ ...db.ticketFromRow(r), attachmentCount: r.attachment_count })));
@@ -212,18 +211,28 @@ router.post('/:id/comments', optionalAuth, (req, res) => {
   res.status(201).json(ticketDetail(loadTicket(row.id)));
 });
 
-// Admin changes status (with an optional note to the reporter).
+// Admin triage: change status and/or severity, with an optional note to the reporter.
 router.patch('/:id', requireAdmin, (req, res) => {
   const row = loadTicket(req.params.id);
   if (!row) throw new HttpError(404, 'Ticket not found.');
-  const { status } = req.body;
-  const message = text(req.body.message, 2000);
+  const status = req.body.status ?? row.status;
+  const severity = req.body.severity === undefined ? row.severity : (req.body.severity || null);
+  const note = text(req.body.message, 2000);
   if (!STATUSES.includes(status)) throw new HttpError(400, 'Invalid status.');
-  if (status === 'rejected' && !message) throw new HttpError(400, 'Tell the reporter why the ticket is rejected.');
+  if (severity !== null && !SEVERITIES.includes(severity)) throw new HttpError(400, 'Invalid severity.');
+  const statusChanged = status !== row.status;
+  const severityChanged = severity !== row.severity;
+  if (statusChanged && status === 'rejected' && !note) throw new HttpError(400, 'Tell the reporter why the ticket is rejected.');
+  if (!statusChanged && !severityChanged && !note) throw new HttpError(400, 'Nothing to update.');
+
+  const message = [severityChanged && (severity ? `Severity set to ${severity}.` : 'Severity cleared.'), note]
+    .filter(Boolean).join(' ') || null;
   db.tx(() => {
-    db.get().prepare("UPDATE tickets SET status = ?, updated_at = datetime('now') WHERE id = ?").run(status, row.id);
+    db.get().prepare("UPDATE tickets SET status = ?, severity = ?, updated_at = datetime('now') WHERE id = ?")
+      .run(status, severity, row.id);
     db.get().prepare(`INSERT INTO ticket_updates (ticket_id, author, author_role, status_from, status_to, message)
-                      VALUES (?, 'Store team', 'admin', ?, ?, ?)`).run(row.id, row.status, status, message);
+                      VALUES (?, 'Store team', 'admin', ?, ?, ?)`)
+      .run(row.id, statusChanged ? row.status : null, statusChanged ? status : null, message);
   });
   res.json(ticketDetail(loadTicket(row.id)));
 });

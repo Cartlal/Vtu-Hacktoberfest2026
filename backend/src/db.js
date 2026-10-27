@@ -9,6 +9,30 @@ const bcrypt = require('bcryptjs');
 const { DatabaseSync } = require('node:sqlite');
 const { PRODUCTS } = require('./seed');
 
+// Kept separate so migrate() can rebuild the table with the same definition.
+const TICKET_COLUMNS = `
+  id           TEXT PRIMARY KEY,
+  access_token TEXT NOT NULL,
+  user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  name         TEXT,
+  email        TEXT NOT NULL,
+  title        TEXT NOT NULL,
+  category     TEXT NOT NULL,
+  -- Set by triage (AutoFix or an admin), never by the reporter; NULL = not triaged yet.
+  severity     TEXT CHECK (severity IN ('low', 'medium', 'high', 'critical')),
+  page_url     TEXT,
+  description  TEXT NOT NULL,
+  steps        TEXT,
+  expected     TEXT,
+  actual       TEXT,
+  environment  TEXT,
+  status       TEXT NOT NULL DEFAULT 'open'
+               CHECK (status IN ('open', 'in_progress', 'resolved', 'closed', 'rejected')),
+  autofix_id   TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+`;
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,27 +93,7 @@ CREATE TABLE IF NOT EXISTS subscribers (
 );
 
 -- "Report a problem" tickets. AutoFix triages these and posts progress back.
-CREATE TABLE IF NOT EXISTS tickets (
-  id           TEXT PRIMARY KEY,
-  access_token TEXT NOT NULL,
-  user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  name         TEXT,
-  email        TEXT NOT NULL,
-  title        TEXT NOT NULL,
-  category     TEXT NOT NULL,
-  severity     TEXT NOT NULL CHECK (severity IN ('low', 'medium', 'high', 'critical')),
-  page_url     TEXT,
-  description  TEXT NOT NULL,
-  steps        TEXT,
-  expected     TEXT,
-  actual       TEXT,
-  environment  TEXT,
-  status       TEXT NOT NULL DEFAULT 'open'
-               CHECK (status IN ('open', 'in_progress', 'resolved', 'closed', 'rejected')),
-  autofix_id   TEXT,
-  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
-);
+CREATE TABLE IF NOT EXISTS tickets (${TICKET_COLUMNS});
 CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets (status, created_at);
 
 -- Screenshots live in the database (not on disk) so they survive with their ticket.
@@ -123,6 +127,7 @@ function open(file = process.env.DB_FILE || path.join(__dirname, '..', 'data', '
   db.exec('PRAGMA foreign_keys = ON;');
   if (file !== ':memory:') db.exec('PRAGMA journal_mode = WAL;');
   db.exec(SCHEMA);
+  migrate();
   seedProducts();
   seedAdmin();
   return db;
@@ -143,6 +148,26 @@ function tx(fn) {
   } catch (err) {
     db.exec('ROLLBACK');
     throw err;
+  }
+}
+
+// Brings databases created by older versions up to the current schema.
+function migrate() {
+  // tickets.severity used to be required (chosen by the reporter). SQLite can't
+  // drop a NOT NULL constraint in place, so rebuild the table, keeping its rows,
+  // in SQLite's recommended order (new table, copy, drop old, rename new) so the
+  // attachment/update tables keep pointing at "tickets".
+  const severity = db.prepare('PRAGMA table_info(tickets)').all().find((c) => c.name === 'severity');
+  if (severity?.notnull) {
+    db.exec('PRAGMA foreign_keys = OFF;');
+    tx(() => {
+      db.exec(`CREATE TABLE tickets_new (${TICKET_COLUMNS});`);
+      db.exec('INSERT INTO tickets_new SELECT * FROM tickets;');
+      db.exec('DROP TABLE tickets;');
+      db.exec('ALTER TABLE tickets_new RENAME TO tickets;');
+      db.exec(SCHEMA);  // recreates the index dropped with the old table
+    });
+    db.exec('PRAGMA foreign_keys = ON;');
   }
 }
 

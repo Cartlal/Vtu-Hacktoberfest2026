@@ -5,10 +5,19 @@ import { api } from '../api';
 import { inr, formatDate, STATUS_LABELS } from '../format';
 import ProductArt from '../components/ProductArt';
 
+// Saved at checkout, so SMEPay's redirect (which has no token) still opens the order.
+function savedOrderToken(id) {
+  try {
+    return JSON.parse(localStorage.getItem('toc_orders') || '{}')[id] || null;
+  } catch {
+    return null;
+  }
+}
+
 export default function Order() {
   const { id } = useParams();
   const [params] = useSearchParams();
-  const token = params.get('token');
+  const token = params.get('token') || savedOrderToken(id);
   const [state, setState] = useState({ order: null, error: '' });
 
   useEffect(() => {

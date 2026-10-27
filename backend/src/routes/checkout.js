@@ -12,7 +12,7 @@ const PHONE_RE = /^[6-9]\d{9}$/;   // Indian mobile number, 10 digits
 const PIN_RE = /^\d{6}$/;
 
 router.get('/payment-config', (req, res) => {
-  res.json({ mode: payments.mode(), coupons: Object.entries(COUPONS).map(([code, c]) => ({ code, label: c.label })) });
+  res.json({ mode: payments.mode(), testMode: payments.isTestMode(), coupons: Object.entries(COUPONS).map(([code, c]) => ({ code, label: c.label })) });
 });
 
 // Price preview for the cart page (coupon check, shipping) without creating an order.
@@ -72,7 +72,10 @@ router.post('/', optionalAuth, asyncRoute(async (req, res) => {
 
   let payment;
   try {
-    payment = await payments.createPayment(order);
+    payment = await payments.createPayment(
+      { ...order, customer },
+      { callbackUrl: `${publicUrl(req)}/api/payments/smepay/callback?order=${order.id}` }
+    );
   } catch (err) {
     db.get().prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?").run(order.id);
     throw err;
@@ -97,7 +100,15 @@ router.post('/:id/verify', asyncRoute(async (req, res) => {
   if (row.status !== 'pending_payment') throw new HttpError(409, `This order is ${row.status.replace('_', ' ')}.`);
 
   let paymentId;
-  if (row.payment_provider === 'razorpay') {
+  if (row.payment_provider === 'smepay') {
+    const check = await payments.validateSmepay(row.payment_order_id, row.total);
+    if (!check.paid) {
+      throw new HttpError(400, check.status === 'FAILED'
+        ? 'The payment failed. You have not been charged; please try again.'
+        : 'We have not received the payment yet. If you paid, wait a moment and refresh your order page.');
+    }
+    paymentId = `smepay_${row.payment_order_id}`;
+  } else if (row.payment_provider === 'razorpay') {
     const { razorpay_order_id: rzpOrder, razorpay_payment_id: rzpPayment, razorpay_signature: sig } = req.body;
     if (rzpOrder !== row.payment_order_id || !payments.verifyRazorpaySignature(rzpOrder, rzpPayment, sig)) {
       throw new HttpError(400, 'Payment could not be verified.');
@@ -109,6 +120,14 @@ router.post('/:id/verify', asyncRoute(async (req, res) => {
     throw new HttpError(400, 'Payment could not be verified.');
   }
 
+  res.json(fulfil(row, paymentId));
+}));
+
+// Marks a verified payment as paid, atomically re-checking and decrementing
+// stock. Shared by /verify and the SMEPay webhook. Returns the order.
+function fulfil(row, paymentId) {
+  const current = db.get().prepare('SELECT * FROM orders WHERE id = ?').get(row.id);
+  if (current.status !== 'pending_payment') return db.orderFromRow(current);   // already handled
   const items = JSON.parse(row.items);
   const soldOut = db.tx(() => {
     const getStock = db.get().prepare('SELECT stock FROM products WHERE id = ?');
@@ -125,7 +144,13 @@ router.post('/:id/verify', asyncRoute(async (req, res) => {
     db.get().prepare("UPDATE orders SET status = 'cancelled', payment_id = ? WHERE id = ?").run(paymentId, row.id);
     throw new HttpError(409, `${soldOut.name} sold out while you were paying. Your order was cancelled and the payment will be refunded.`);
   }
-  res.json(db.orderFromRow(db.get().prepare('SELECT * FROM orders WHERE id = ?').get(row.id)));
-}));
+  return db.orderFromRow(db.get().prepare('SELECT * FROM orders WHERE id = ?').get(row.id));
+}
 
-module.exports = router;
+// Public base URL for gateway callbacks: PUBLIC_URL if set, else this request's host
+// (Render sits behind a proxy; app.js trusts it, so req.protocol is https there).
+function publicUrl(req) {
+  return (process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+}
+
+module.exports = { router, fulfil };

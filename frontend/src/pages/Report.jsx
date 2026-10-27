@@ -6,7 +6,7 @@ import {
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
 import {
-  IMAGE_TYPES, MAX_SCREENSHOT_BYTES, MAX_SCREENSHOTS, SITE_PAGES, TICKET_CATEGORIES, TICKET_SEVERITIES, rememberTicket
+  IMAGE_TYPES, MAX_SCREENSHOT_BYTES, MAX_SCREENSHOTS, SITE_PAGES, TICKET_CATEGORIES, rememberTicket
 } from '../content/tickets';
 
 const CATEGORY_ICONS = { Bug, Type, Palette, Lightbulb, CreditCard, CircleHelp };
@@ -94,7 +94,8 @@ function Success({ result, onAnother }) {
   );
 }
 
-const EMPTY = { title: '', category: '', severity: 'medium', pageUrl: '', description: '', steps: '', expected: '', actual: '' };
+// No severity field: the ticketing side (AutoFix's Gemma triage or an admin) decides it.
+const EMPTY = { title: '', category: '', pageUrl: '', description: '', steps: '', expected: '', actual: '' };
 
 export default function Report() {
   const { user } = useAuth();
@@ -236,19 +237,6 @@ export default function Report() {
             })}
           </div>
           {err('category')}
-
-          <div className="field">
-            <span id="severity-label" style={{ fontSize: '0.85rem', color: 'var(--muted)', fontWeight: 500 }}>How serious is it?</span>
-            <div className="severity-row" role="radiogroup" aria-labelledby="severity-label">
-              {TICKET_SEVERITIES.map((s) => (
-                <label key={s.id} className={`severity-opt sev-${s.id} ${form.severity === s.id ? 'active' : ''}`}>
-                  <input type="radio" name="severity" value={s.id} checked={form.severity === s.id} onChange={set('severity')} />
-                  <strong>{s.label}</strong>
-                  <span>{s.hint}</span>
-                </label>
-              ))}
-            </div>
-          </div>
         </section>
 
         <section className="card stack">

@@ -21,7 +21,7 @@ function describe(ticket) {
     ticket.steps && `Steps to reproduce:\n${ticket.steps}`,
     ticket.expected && `Expected: ${ticket.expected}`,
     ticket.actual && `Actual: ${ticket.actual}`,
-    `Category: ${CATEGORY_LABELS[ticket.category] || ticket.category} · Reporter severity: ${ticket.severity}`
+    `Category: ${CATEGORY_LABELS[ticket.category] || ticket.category}`
   ].filter(Boolean).join('\n\n').slice(0, 5000);
 }
 

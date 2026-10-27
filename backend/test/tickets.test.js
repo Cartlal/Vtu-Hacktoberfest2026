@@ -50,7 +50,7 @@ function form(fields, files = []) {
 const valid = {
   title: 'Checkout button overlaps footer',
   category: 'design',
-  severity: 'high',
+  severity: 'critical',          // sent by an old/tampered client; must be ignored
   pageUrl: '/checkout',
   description: 'On my phone the Pay button sits on top of the footer text.',
   steps: '1. Add a tee\n2. Open checkout on a phone',
@@ -91,7 +91,7 @@ test('raises a ticket with screenshots and serves them only to the reporter and 
   assert.equal((await json('GET', `/tickets/${id}`)).status, 404);
   const view = await json('GET', `/tickets/${id}?token=${accessToken}`);
   assert.equal(view.status, 200);
-  assert.equal(view.body.severity, 'high');
+  assert.equal(view.body.severity, null);              // triage sets it, not the reporter
   assert.equal(view.body.attachments.length, 2);
   assert.deepEqual(view.body.environment, { userAgent: 'TestBrowser/1.0', viewport: '375x812', language: 'en-IN' });
   assert.equal(view.body.updates[0].message, 'Ticket raised');
@@ -147,8 +147,10 @@ test('AutoFix callback updates the ticket, but never overrides a closed one', as
   assert.equal((await json('POST', path, { message: 'hi' })).status, 401);
   assert.equal((await json('POST', path, { message: 'hi' }, { 'X-AutoFix-Secret': 'wrong-secret!' })).status, 401);
 
-  const ok = await json('POST', path, { status: 'IN_PROGRESS', message: 'Gemma rated this LOW risk.' }, { 'X-AutoFix-Secret': 'shared-secret' });
+  assert.equal((await json('POST', path, { message: 'hi', risk: 'EXTREME' }, { 'X-AutoFix-Secret': 'shared-secret' })).status, 400);
+  const ok = await json('POST', path, { status: 'IN_PROGRESS', risk: 'LOW', message: 'Gemma rated this LOW risk.' }, { 'X-AutoFix-Secret': 'shared-secret' });
   assert.equal(ok.body.ticketStatus, 'in_progress');
+  assert.equal((await json('GET', `/tickets/${t.id}?token=${t.accessToken}`)).body.severity, 'low');
 
   const admin = await adminToken();
   await json('PATCH', `/tickets/${t.id}`, { status: 'closed', message: 'Duplicate' }, { Authorization: `Bearer ${admin}` });
@@ -173,16 +175,66 @@ test('reporter comments, admin triage, and signed-in history', async () => {
 
   assert.equal((await json('GET', '/tickets', null, { Authorization: `Bearer ${auth.token}` })).status, 403);
   const admin = await adminToken();
-  const list = await json('GET', '/tickets?severity=high&status=open', null, { Authorization: `Bearer ${admin}` });
+  const asAdmin = { Authorization: `Bearer ${admin}` };
+
+  // Admin sets severity on its own; it then filters, and AutoFix can't override it.
+  const triaged = await json('PATCH', `/tickets/${t.id}`, { severity: 'high' }, asAdmin);
+  assert.equal(triaged.body.severity, 'high');
+  assert.equal(triaged.body.status, 'open');
+  assert.equal(triaged.body.updates.at(-1).message, 'Severity set to high.');
+  await json('POST', `/autofix/bugs/${t.id}/update`, { risk: 'LOW', message: 'Gemma: LOW' }, { 'X-AutoFix-Secret': 'shared-secret' });
+  const list = await json('GET', '/tickets?severity=high&status=open', null, asAdmin);
   assert.ok(list.body.some((x) => x.id === t.id));
   assert.ok(list.body.every((x) => x.severity === 'high' && x.status === 'open'));
 
-  assert.equal((await json('PATCH', `/tickets/${t.id}`, { status: 'rejected' }, { Authorization: `Bearer ${admin}` })).status, 400);
+  assert.equal((await json('PATCH', `/tickets/${t.id}`, { severity: 'extreme' }, asAdmin)).status, 400);
+  assert.equal((await json('PATCH', `/tickets/${t.id}`, {}, asAdmin)).status, 400);
+  assert.equal((await json('PATCH', `/tickets/${t.id}`, { status: 'rejected' }, asAdmin)).status, 400);
   const resolved = await json('PATCH', `/tickets/${t.id}`, { status: 'resolved', message: 'Fixed in today’s deploy.' }, { Authorization: `Bearer ${admin}` });
   assert.equal(resolved.body.status, 'resolved');
 
   const stats = await json('GET', '/admin/stats', null, { Authorization: `Bearer ${admin}` });
   assert.equal(typeof stats.body.openTickets, 'number');
+});
+
+test('migrates an old database where reporters chose severity, keeping tickets and screenshots', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { DatabaseSync } = require('node:sqlite');
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'toc-')), 'old.db');
+  const old = new DatabaseSync(file);
+  old.exec(`
+    CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'customer', created_at TEXT NOT NULL DEFAULT (datetime('now')));
+    CREATE TABLE tickets (id TEXT PRIMARY KEY, access_token TEXT NOT NULL, user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      name TEXT, email TEXT NOT NULL, title TEXT NOT NULL, category TEXT NOT NULL,
+      severity TEXT NOT NULL CHECK (severity IN ('low', 'medium', 'high', 'critical')),
+      page_url TEXT, description TEXT NOT NULL, steps TEXT, expected TEXT, actual TEXT, environment TEXT,
+      status TEXT NOT NULL DEFAULT 'open', autofix_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')));
+    CREATE TABLE ticket_attachments (id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE, filename TEXT NOT NULL, mime TEXT NOT NULL,
+      size INTEGER NOT NULL, data BLOB NOT NULL);
+    INSERT INTO tickets (id, access_token, email, title, category, severity, description)
+      VALUES ('BUG-OLD001', 'tok', 'a@b.co', 'Old ticket', 'bug', 'medium', 'From before the change');
+    INSERT INTO ticket_attachments (ticket_id, filename, mime, size, data) VALUES ('BUG-OLD001', 's.png', 'image/png', 3, x'010203');
+  `);
+  old.close();
+
+  const migrated = db.open(file);
+  const severity = migrated.prepare('PRAGMA table_info(tickets)').all().find((c) => c.name === 'severity');
+  assert.equal(severity.notnull, 0);
+  assert.equal(migrated.prepare("SELECT severity FROM tickets WHERE id = 'BUG-OLD001'").get().severity, 'medium');
+  assert.equal(migrated.prepare('SELECT COUNT(*) AS n FROM ticket_attachments').get().n, 1);
+  assert.deepEqual(migrated.prepare('PRAGMA foreign_key_check').all(), []);
+  assert.ok(migrated.prepare("SELECT 1 FROM sqlite_master WHERE name = 'idx_tickets_status'").get());
+  migrated.prepare(`INSERT INTO tickets (id, access_token, email, title, category, description)
+                    VALUES ('BUG-NEW001', 't', 'a@b.co', 'New', 'bug', 'No severity')`).run();
+  // Cascade still points at the rebuilt table.
+  migrated.prepare("DELETE FROM tickets WHERE id = 'BUG-OLD001'").run();
+  assert.equal(migrated.prepare('SELECT COUNT(*) AS n FROM ticket_attachments').get().n, 0);
+  db.open(':memory:');   // later tests use a fresh in-memory database again
 });
 
 test('rate-limits the public form', async () => {

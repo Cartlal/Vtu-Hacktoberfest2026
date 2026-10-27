@@ -13,14 +13,16 @@ accounts and an admin dashboard. React frontend, Node/Express backend, one Rende
 - **Shop**: categories, search, size and price filters, sorting, product pages with sizes, stock levels and related items.
 - **Cart and checkout**: persistent cart, server-side pricing, coupon codes, free shipping over ₹999, free campus
   pickup, Indian phone/PIN validation, guest or signed-in checkout.
-- **Payments**: Razorpay (UPI, cards, net banking, wallets) in test mode, with signature verification. With no keys
-  set, a built-in demo gateway is used so checkout always works. Live keys are refused unless `ALLOW_LIVE_PAYMENTS=true`.
+- **Payments**: **SMEPay** UPI checkout widget (scan a QR with any UPI app). The server creates the SMEPay order and
+  marks it paid only after SMEPay's `/order/validate` confirms it; the webhook (`/api/payments/smepay/callback`) is
+  re-validated the same way. Razorpay is available as an alternative (`PAYMENT_PROVIDER=razorpay`). With no keys set,
+  a built-in demo gateway is used so checkout always works. Live mode is refused unless `ALLOW_LIVE_PAYMENTS=true`.
 - **Orders**: stock is decremented atomically when payment is confirmed; confirmation page; order history.
 - **Accounts**: register, sign in (JWT, bcrypt).
 - **Admin dashboard** (`/admin`): revenue, orders, items sold, low-stock alerts, 14-day revenue chart, order status
   management (cancelling restocks), product price/stock/visibility editing, add products.
 - **Report a problem** (`/report`): a floating "Report a bug" button on every page opens a full ticket form: problem
-  type, severity, page (auto-filled), what happened, steps to reproduce, expected vs actual, up to 3 screenshots
+  type, page (auto-filled), what happened, steps to reproduce, expected vs actual, up to 3 screenshots
   (click, drag and drop, or paste with Ctrl+V; PNG/JPEG/GIF/WebP, 3 MB each, checked by file content), contact
   details and optional browser info. Reporters get a private tracking page (`/ticket/:id`) with status, timeline and
   comments; signed-in users see "Your reports" on their account. Admins triage in the **Tickets** tab.
@@ -34,7 +36,7 @@ Coupons: `HACKTOBER26` (15% off ₹999+), `GDGVTU` (₹100 off ₹599+), `SPOOKY
 |---|---|
 | Frontend | React 19, Vite, React Router, lucide-react |
 | Backend | Node 22.13+ / Express, `node:sqlite`, JWT, bcryptjs |
-| Payments | Razorpay Orders API + Checkout.js (test mode) |
+| Payments | SMEPay Wizard API + checkout widget (test mode); Razorpay optional |
 | Hosting | Render web service (`render.yaml`), GitHub Actions CI |
 
 ## Run locally
@@ -54,8 +56,8 @@ forward and callback). Lint: `npm run lint`.
 ## Deploy on Render
 1. Push this repo to GitHub.
 2. Render → **New → Blueprint** → select the repo. `render.yaml` creates one free web service.
-3. In the service's **Environment**, set `ADMIN_EMAIL`, `ADMIN_PASSWORD`, and optionally `RAZORPAY_KEY_ID` /
-   `RAZORPAY_KEY_SECRET` (test keys from dashboard.razorpay.com in Test mode). `JWT_SECRET` is generated for you.
+3. In the service's **Environment**, set `ADMIN_EMAIL`, `ADMIN_PASSWORD`, and `SMEPAY_CLIENT_ID` /
+   `SMEPAY_CLIENT_SECRET` (from app.smepay.in → Integrations; keep `SMEPAY_ENV=test`). `JWT_SECRET` is generated for you.
 4. Every push to the default branch redeploys automatically. Health check: `/api/health`.
 
 **Data on the free plan:** the database is a SQLite file on the service's disk, which Render resets on every deploy
