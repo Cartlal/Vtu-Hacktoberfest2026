@@ -12,7 +12,7 @@ export const EVENT = {
     { date: 'Oct 1', title: 'Hacktoberfest kicks off', text: 'Register, pick your first issues, and join the GDG on Campus VTU contributor channel.' },
     { date: 'Oct 10', title: 'First-PR workshop', text: 'A hands-on session on forking, branching and opening a clean pull request.' },
     { date: 'Oct 24', title: 'Maintainer office hours', text: 'Bring your stuck PRs. Mentors review live and help you get them merged.' },
-    { date: 'Oct 31', title: 'Halloween hack night', text: 'Costumes on, laptops open. Merch pickup, costume contest and a midnight merge party.' }
+    { date: 'Oct 31', title: 'Halloween hackathron night', text: 'Costumes on, laptops open. Merch pickup, costume contest and a midnight merge party.' }
   ],
   faqs: [
     { q: 'Is this the official Hacktoberfest store?', a: 'No. This is an unofficial campus merch store for the VTU on-campus event, run with GDG on Campus VTU. Hacktoberfest itself is organised by DigitalOcean.' },
