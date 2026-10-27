@@ -149,7 +149,7 @@ p { line-height: 1.6; margin: 0 0 1em; color: var(--muted); }
 
 .faq details { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 20px; margin-bottom: 10px; }
 .faq summary { cursor: pointer; font-weight: 600; }
-.faq details p { margin: 10px 0 0; }
+.faq details p { margin: 10px 0 0; color: var(--text); }
 
 .newsletter { display: grid; grid-template-columns: 1.3fr 1fr; gap: 24px; align-items: center; padding: 32px;
               background: linear-gradient(135deg, rgba(255, 122, 26, 0.12), rgba(155, 109, 255, 0.15)); }
